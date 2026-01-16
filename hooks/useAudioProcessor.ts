@@ -1,8 +1,18 @@
 
+
+
+
+
+
+
+
+
+
 import { useState, useEffect, useRef } from 'react';
 import { audioService } from '../services/audioService';
 import { cacheService } from '../services/cacheService';
 import { TuningPreset, AudioSettings, ProcessState } from '../types';
+import JSZip from 'jszip';
 
 export const useAudioProcessor = () => {
   // State
@@ -13,6 +23,10 @@ export const useAudioProcessor = () => {
   const [tuningPreset, setTuningPreset] = useState<TuningPreset>(TuningPreset.STANDARD_440);
   const [duration, setDuration] = useState<number>(0);
   
+  // Batch Processing State
+  const [batchQueue, setBatchQueue] = useState<File[]>([]);
+  const [batchProgress, setBatchProgress] = useState<{current: number, total: number} | null>(null);
+
   // Analysis State
   const [hasHiResContent, setHasHiResContent] = useState<boolean>(false);
   const [detectedPitch, setDetectedPitch] = useState<number>(440);
@@ -20,6 +34,9 @@ export const useAudioProcessor = () => {
   const [isCachedResult, setIsCachedResult] = useState<boolean>(false);
   const [isBufferCached, setIsBufferCached] = useState<boolean>(false);
   
+  // A/B Compare State
+  const [isComparing, setIsComparing] = useState<boolean>(false);
+
   // Real-time Metrics
   const [currentTHD, setCurrentTHD] = useState<number>(0);
   const thdIntervalRef = useRef<number | null>(null);
@@ -37,7 +54,18 @@ export const useAudioProcessor = () => {
     bypassResonance: false,
     bypassAir: false,
     stereoWidth: 1.0,
-    sacredGeometryMode: false
+    sacredGeometryMode: false,
+    // Phase 2 Defaults
+    fibonacciAlignment: false,
+    phaseLockEnabled: false,
+    cymaticsMode: false,
+    binauralMode: false,
+    binauralBeatFreq: 8,
+    // Phase 3 Defaults
+    harmonicWarmth: 0.0,
+    harmonicClarity: 0.0,
+    // Phase 4 Defaults
+    deepZenBass: 0.0
   });
 
   // Actions
@@ -55,6 +83,17 @@ export const useAudioProcessor = () => {
     // Sacred Geometry Mode
     audioService.setSacredGeometryMode(newSettings.sacredGeometryMode);
     
+    // Phase 2 Settings
+    audioService.setFibonacciAlignment(newSettings.fibonacciAlignment);
+    audioService.setPhaseLockEnabled(newSettings.phaseLockEnabled);
+    audioService.setBinauralMode(newSettings.binauralMode, newSettings.binauralBeatFreq);
+    
+    // Phase 3: Harmonic Shaping
+    audioService.setHarmonicShaping(newSettings.harmonicWarmth, newSettings.harmonicClarity);
+    
+    // Phase 4: Psychoacoustic Bass
+    audioService.setDeepZenBass(newSettings.deepZenBass);
+
     audioService.setEQBypass({
       body: newSettings.bypassBody,
       resonance: newSettings.bypassResonance,
@@ -64,7 +103,11 @@ export const useAudioProcessor = () => {
 
   const loadFile = async (files: File[]) => {
     if (!files || files.length === 0) return;
-    const selectedFile = files[0]; // Currently handling single file from the batch
+    
+    // Store full batch for later processing
+    setBatchQueue(files);
+
+    const selectedFile = files[0]; // Currently handling single file from the batch for preview
 
     try {
       setProcessState('decoding');
@@ -76,6 +119,7 @@ export const useAudioProcessor = () => {
       setIsBufferCached(false);
       setDetectedBass(0);
       setCurrentTHD(0);
+      setIsComparing(false); // Reset comparison mode
       
       // 1. Buffer Cache Handling
       const cachedBufferData = await cacheService.loadBuffer(selectedFile);
@@ -190,6 +234,12 @@ export const useAudioProcessor = () => {
     }
   };
 
+  // Toggle A/B Comparison
+  const toggleCompare = (active: boolean) => {
+      setIsComparing(active);
+      audioService.toggleBypass(active);
+  };
+
   // THD Polling Loop
   useEffect(() => {
     if (isPlaying) {
@@ -213,41 +263,103 @@ export const useAudioProcessor = () => {
   const changeTuningPreset = (preset: TuningPreset) => {
     if (preset === tuningPreset) return;
     setTuningPreset(preset);
-    // Updated to use the new method name in AudioService
     audioService.setTargetFrequency(preset);
   };
 
   const download = async () => {
-    if (!file) return;
+    if (!file && batchQueue.length === 0) return;
+
     try {
       setIsDownloading(true);
-      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      // Check if Batch Mode
+      if (batchQueue.length > 1) {
+          const zip = new JSZip();
+          setBatchProgress({ current: 0, total: batchQueue.length });
+          
+          for (let i = 0; i < batchQueue.length; i++) {
+              const currentFile = batchQueue[i];
+              setBatchProgress({ current: i + 1, total: batchQueue.length });
+              
+              // We need to determine the Pitch/Bass for each file if not already analyzed
+              // This is a simplified batch flow that analyzes on fly or uses default
+              
+              // 1. Decode Offline
+              const buffer = await audioService.decodeFileOffline(currentFile);
+              
+              // 2. Quick Analyze (or load cache)
+              // Note: For true batching, we might skip deep analysis for speed and assume 440 or use standard detect
+              // Here we try to load cache first
+              let filePitch = 440;
+              let fileBass = 0;
+              
+              const cached = await cacheService.loadAnalysis(currentFile, 50);
+              if (cached) {
+                  filePitch = cached.pitch;
+                  fileBass = cached.bassPitch || 0;
+              } else {
+                  // Fallback: If not analyzing every file, we assume standard A440 for batch speed
+                  // or we could run the worker. For now, assume 440 to avoid massive wait times on main thread
+                  // unless we implement full queue worker logic.
+                  filePitch = 440; 
+              }
 
-      const blob = await audioService.exportAudio(tuningPreset);
-      
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      
-      const originalName = file.name.replace(/\.[^/.]+$/, "");
-      const suffix = `_${tuningPreset}Hz_Mastered`;
-      a.download = `${originalName}${suffix}.wav`;
-      
-      document.body.appendChild(a);
-      a.click();
-      
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+              // 3. Process
+              const blob = await audioService.processOffline(
+                  buffer, 
+                  tuningPreset, 
+                  fileBass, 
+                  filePitch,
+                  audioSettings // Pass current settings for harmonic shaping & deep zen bass
+              );
+              
+              const originalName = currentFile.name.replace(/\.[^/.]+$/, "");
+              const suffix = `_${tuningPreset}Hz_ZenTuner.wav`;
+              zip.file(`${originalName}${suffix}`, blob);
+          }
+          
+          const content = await zip.generateAsync({type: "blob"});
+          const url = URL.createObjectURL(content);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `ZenTuner_Batch_${tuningPreset}Hz.zip`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          
+      } else {
+          // Single File Export (Previous Logic)
+          await new Promise(resolve => setTimeout(resolve, 50));
+          const blob = await audioService.exportAudio(tuningPreset, audioSettings);
+          
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          
+          const originalName = file!.name.replace(/\.[^/.]+$/, "");
+          const suffix = `_${tuningPreset}Hz_ZenMaster.wav`;
+          a.download = `${originalName}${suffix}`;
+          
+          document.body.appendChild(a);
+          a.click();
+          
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+      }
+
     } catch (error) {
       console.error("Export failed:", error);
       alert("Failed to export audio.");
     } finally {
       setIsDownloading(false);
+      setBatchProgress(null);
     }
   };
 
   const reset = () => {
     setFile(null);
+    setBatchQueue([]);
     setProcessState('idle');
     setSensitivity(50);
     audioService.stop();
@@ -275,6 +387,8 @@ export const useAudioProcessor = () => {
     isPlaying,
     processState,
     isDownloading,
+    batchQueue,
+    batchProgress,
     tuningPreset,
     audioSettings,
     analysis: {
@@ -285,6 +399,8 @@ export const useAudioProcessor = () => {
       isBufferCached,
       currentTHD
     },
+    isComparing,
+    toggleCompare,
     sensitivity,
     setSensitivity,
     bassSensitivity,

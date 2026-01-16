@@ -1,7 +1,7 @@
 
 
 import React, { useState } from 'react';
-import { Play, Pause, Music, Download, Loader2, ChevronDown, Check } from 'lucide-react';
+import { Play, Pause, Music, Download, Loader2, ChevronDown, Check, Split, Layers, Sparkles } from 'lucide-react';
 import { TuningPreset, TUNING_LABELS } from '../types';
 
 interface ControlPanelProps {
@@ -13,6 +13,9 @@ interface ControlPanelProps {
   isDownloading: boolean;
   fileName: string | null;
   thdValue?: number;
+  isComparing?: boolean;
+  onToggleCompare?: (active: boolean) => void;
+  batchCount?: number;
 }
 
 const ControlPanel: React.FC<ControlPanelProps> = ({ 
@@ -23,7 +26,10 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   onDownload,
   isDownloading,
   fileName,
-  thdValue = 0
+  thdValue = 0,
+  isComparing = false,
+  onToggleCompare,
+  batchCount = 0
 }) => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
@@ -40,6 +46,15 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
     return 'bg-rose-500 shadow-[0_0_15px_rgba(244,63,94,0.7)]';
   };
 
+  // Numerology: Recursive Digital Root
+  const getDigitalRoot = (n: number) => {
+    const root = (n - 1) % 9 + 1;
+    return root;
+  };
+
+  const digitalRoot = getDigitalRoot(Math.round(targetFrequency));
+  const isTeslaAligned = [3, 6, 9].includes(digitalRoot);
+
   return (
     <div className="mt-8 bg-slate-800/50 backdrop-blur-md p-6 rounded-2xl border border-slate-700 shadow-xl">
       
@@ -47,21 +62,50 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
         
         {/* File Info */}
         <div className="flex items-center gap-3 w-full md:w-auto overflow-hidden">
-          <div className="w-12 h-12 flex-shrink-0 rounded-full bg-slate-700 flex items-center justify-center text-indigo-400">
+          <div className="w-12 h-12 flex-shrink-0 rounded-full bg-slate-700 flex items-center justify-center text-indigo-400 relative">
             <Music size={24} />
+            {batchCount > 1 && (
+                <div className="absolute -top-1 -right-1 w-5 h-5 bg-indigo-500 rounded-full flex items-center justify-center text-[10px] text-white font-bold border-2 border-slate-800">
+                    {batchCount}
+                </div>
+            )}
           </div>
           <div className="overflow-hidden min-w-0">
             <h3 className="text-slate-200 font-semibold truncate max-w-[150px] md:max-w-[200px]">
               {fileName || "No Audio Loaded"}
             </h3>
-            <p className="text-slate-400 text-xs uppercase tracking-wider">
-              {fileName ? "Ready to Zen" : "Waiting for Upload"}
+            <p className="text-slate-400 text-xs uppercase tracking-wider flex items-center gap-1">
+              {batchCount > 1 ? (
+                  <><Layers size={10} /> Batch Ready ({batchCount} tracks)</>
+              ) : (
+                  fileName ? "Ready to Zen" : "Waiting for Upload"
+              )}
             </p>
           </div>
         </div>
 
         {/* Playback Control */}
         <div className="flex items-center gap-6">
+           {/* A/B Compare Toggle - Seamless */}
+           {onToggleCompare && fileName && (
+              <button
+                onMouseDown={() => onToggleCompare(true)}
+                onMouseUp={() => onToggleCompare(false)}
+                onMouseLeave={() => onToggleCompare(false)}
+                onTouchStart={() => onToggleCompare(true)}
+                onTouchEnd={() => onToggleCompare(false)}
+                className={`
+                   w-10 h-10 rounded-full flex items-center justify-center transition-all border
+                   ${isComparing 
+                     ? 'bg-amber-500 border-amber-400 text-white scale-95 shadow-[0_0_15px_rgba(245,158,11,0.5)]' 
+                     : 'bg-slate-700 border-slate-600 text-slate-400 hover:text-white hover:border-slate-500'}
+                `}
+                title="Hold to Compare (Bypass)"
+              >
+                 <Split size={18} />
+              </button>
+           )}
+
           <button
             onClick={onPlayPause}
             disabled={!fileName}
@@ -142,13 +186,20 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 </>
               )}
             </div>
+            
+            {/* Numerology Badge */}
+            {isTeslaAligned && (
+                <div className="absolute top-full mt-1 flex items-center gap-1 text-[9px] font-mono text-cyan-400 bg-cyan-900/20 px-1.5 py-0.5 rounded border border-cyan-500/30 animate-pulse">
+                    <Sparkles size={8} /> 3-6-9 ALIGNMENT ({digitalRoot})
+                </div>
+            )}
           </div>
 
           {/* Download Button */}
           <button
             onClick={onDownload}
             disabled={isDownloading || !fileName}
-            title="Download processed High-Quality WAV"
+            title={batchCount > 1 ? "Download Batch ZIP" : "Download processed High-Quality WAV"}
             className={`
               mt-auto w-full sm:w-auto h-[42px] px-4 rounded-xl border border-slate-600 
               flex items-center justify-center gap-2 text-slate-300 hover:text-white hover:bg-slate-700
@@ -160,7 +211,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
             ) : (
               <Download size={18} />
             )}
-            <span className="text-sm font-medium hidden lg:inline">Export</span>
+            <span className="text-sm font-medium hidden lg:inline">
+                {batchCount > 1 ? `Export All (${batchCount})` : "Export"}
+            </span>
           </button>
         </div>
 

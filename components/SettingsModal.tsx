@@ -1,6 +1,9 @@
 
+
+
+
 import React from 'react';
-import { X, RotateCcw, Activity, Mic2, Cpu, Sliders, MoveHorizontal, Pyramid } from 'lucide-react';
+import { X, RotateCcw, Activity, Mic2, Cpu, Sliders, MoveHorizontal, Pyramid, Waves, Eye, Clock, Zap, Info, Magnet, Speaker } from 'lucide-react';
 import { AudioSettings, SaturationType } from '../types';
 
 interface SettingsModalProps {
@@ -23,7 +26,15 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
       bypassResonance: false,
       bypassAir: false,
       stereoWidth: 1.0,
-      sacredGeometryMode: false
+      sacredGeometryMode: false,
+      fibonacciAlignment: false,
+      phaseLockEnabled: false,
+      cymaticsMode: false,
+      binauralMode: false,
+      binauralBeatFreq: 8,
+      harmonicWarmth: 0.0,
+      harmonicClarity: 0.0,
+      deepZenBass: 0.0
     });
   };
 
@@ -75,7 +86,169 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
         {/* Body */}
         <div className="p-6 space-y-8">
           
-          {/* Section 1: ZenSpace M/S Control (Prioritized) */}
+          {/* Section: Esoteric Features (Phase 2) */}
+           <div className="space-y-4">
+            <h3 className="text-xs font-mono text-indigo-400 uppercase tracking-widest flex items-center gap-2">
+              <Pyramid size={12} /> Esoteric Labs
+            </h3>
+            
+            <div className="bg-indigo-900/10 rounded-xl p-4 space-y-4 border border-indigo-500/20">
+                <Toggle 
+                    label="Fibonacci Breath (Time-Align)" 
+                    checked={settings.fibonacciAlignment} 
+                    onChange={(v) => onUpdate({...settings, fibonacciAlignment: v})}
+                    icon={<Clock size={14} className="text-amber-400" />}
+                />
+                <p className="text-[10px] text-slate-500 pl-6 -mt-2">
+                    Applies a micro-LFO locked to Φ (1.618s) to align audio tempo with the Golden Ratio.
+                </p>
+
+                <Toggle 
+                    label="Dynamic Phase-Lock" 
+                    checked={settings.phaseLockEnabled} 
+                    onChange={(v) => onUpdate({...settings, phaseLockEnabled: v})}
+                    icon={<Magnet size={14} className="text-emerald-400" />}
+                />
+                <p className="text-[10px] text-slate-500 pl-6 -mt-2">
+                    Micro-nudges the playback rate to synchronize phase zero-crossings with the Golden Grid. Eliminates transient smearing.
+                </p>
+
+                <Toggle 
+                    label="Cymatics Visualizer" 
+                    checked={settings.cymaticsMode} 
+                    onChange={(v) => onUpdate({...settings, cymaticsMode: v})}
+                    icon={<Eye size={14} className="text-cyan-400" />}
+                />
+                
+                <div className="pt-2 border-t border-indigo-500/20">
+                    <Toggle 
+                        label="Binaural Zen-Beats" 
+                        checked={settings.binauralMode} 
+                        onChange={(v) => onUpdate({...settings, binauralMode: v})}
+                        icon={<Waves size={14} className="text-pink-400" />}
+                    />
+                    {settings.binauralMode && (
+                        <div className="mt-3 pl-6 space-y-2 animate-in fade-in slide-in-from-top-1">
+                            <div className="flex justify-between text-xs text-slate-400">
+                                <span>Beat Frequency (Alpha)</span>
+                                <span>{settings.binauralBeatFreq} Hz</span>
+                            </div>
+                            <input 
+                                type="range" min="4" max="14" step="1" 
+                                value={settings.binauralBeatFreq} 
+                                onChange={(e) => onUpdate({...settings, binauralBeatFreq: Number(e.target.value)})}
+                                className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-pink-500"
+                            />
+                            <p className="text-[10px] text-slate-500 italic">
+                                Requires Headphones. Left: {detectedBass > 0 ? detectedBass.toFixed(1) : '60'}Hz | Right: {((detectedBass > 0 ? detectedBass : 60) + settings.binauralBeatFreq).toFixed(1)}Hz
+                            </p>
+                        </div>
+                    )}
+                </div>
+            </div>
+           </div>
+
+           <div className="h-px bg-slate-800" />
+
+          {/* Section: Harmonic Timbre Shaping (New) */}
+          <div className="space-y-4">
+             <div className="flex items-center justify-between">
+                <h3 className="text-xs font-mono text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                  <Zap size={12} className="text-yellow-500" /> Harmonic Timbre Shaping
+                </h3>
+                <div className="group relative">
+                   <Info size={14} className="text-slate-500 cursor-help" />
+                   <div className="absolute right-0 bottom-full mb-2 w-48 p-2 bg-slate-800 text-[10px] text-slate-300 rounded border border-slate-600 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                      Even harmonics (2, 4, 6...) add warmth and fullness. Odd harmonics (3, 5, 7...) add clarity, edge, and presence.
+                   </div>
+                </div>
+             </div>
+
+             <div className="bg-slate-800/40 rounded-xl p-4 border border-slate-700/50">
+                 {/* Visualizer */}
+                 <div className="flex items-end justify-between h-16 px-2 mb-4 gap-1">
+                    {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
+                       const isEven = n % 2 === 0;
+                       let intensity = 0;
+                       
+                       if (n === 1) intensity = 0.2; // Fundamental static
+                       else if (isEven) {
+                          // Decay logic from AudioService: 1 - (index * 0.1)
+                          const decay = 1 - ((n-1) * 0.1); 
+                          intensity = settings.harmonicWarmth * Math.max(0.2, decay);
+                       } else {
+                          intensity = settings.harmonicClarity;
+                       }
+                       
+                       const height = 10 + (intensity * 90);
+                       const colorClass = n===1 ? 'bg-slate-600' : isEven ? 'bg-amber-500' : 'bg-cyan-500';
+                       
+                       return (
+                          <div key={n} className="w-full flex flex-col items-center gap-1 group/bar">
+                              <div 
+                                className={`w-full rounded-t-sm transition-all duration-300 ${colorClass}`} 
+                                style={{ height: `${height}%`, opacity: 0.3 + (intensity * 0.7) }}
+                              />
+                              <span className="text-[9px] font-mono text-slate-500">f{n}</span>
+                          </div>
+                       );
+                    })}
+                 </div>
+
+                 <div className="space-y-4">
+                     {/* Warmth Control */}
+                     <div className="space-y-1">
+                         <div className="flex justify-between text-xs">
+                             <span className="text-amber-200">Warmth (Even)</span>
+                             <span className="font-mono text-amber-500">{(settings.harmonicWarmth * 100).toFixed(0)}%</span>
+                         </div>
+                         <input 
+                            type="range" min="0" max="1" step="0.05"
+                            value={settings.harmonicWarmth}
+                            onChange={(e) => onUpdate({...settings, harmonicWarmth: Number(e.target.value)})}
+                            className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                         />
+                     </div>
+
+                     {/* Clarity Control */}
+                     <div className="space-y-1">
+                         <div className="flex justify-between text-xs">
+                             <span className="text-cyan-200">Clarity (Odd)</span>
+                             <span className="font-mono text-cyan-500">{(settings.harmonicClarity * 100).toFixed(0)}%</span>
+                         </div>
+                         <input 
+                            type="range" min="0" max="1" step="0.05"
+                            value={settings.harmonicClarity}
+                            onChange={(e) => onUpdate({...settings, harmonicClarity: Number(e.target.value)})}
+                            className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                         />
+                     </div>
+                 </div>
+                 
+                 {/* Deep Zen Bass (Psychoacoustic) */}
+                 <div className="mt-4 pt-4 border-t border-slate-700/50 space-y-2">
+                     <div className="flex items-center justify-between">
+                         <h4 className="text-xs text-purple-300 font-medium flex items-center gap-2">
+                             <Speaker size={12} /> Deep Zen Bass
+                         </h4>
+                         <span className="text-xs font-mono text-purple-400">{(settings.deepZenBass * 100).toFixed(0)}%</span>
+                     </div>
+                     <input 
+                        type="range" min="0" max="1" step="0.05"
+                        value={settings.deepZenBass}
+                        onChange={(e) => onUpdate({...settings, deepZenBass: Number(e.target.value)})}
+                        className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                     />
+                     <div className="p-2 bg-purple-900/10 rounded border border-purple-500/10 text-[9px] text-purple-300/80 leading-relaxed">
+                         <span className="font-bold text-purple-300">Psychoacoustic Principle:</span> Utilizes the "Missing Fundamental" effect. Generates upper harmonics of sub-frequencies so your brain perceives bass that small speakers cannot reproduce.
+                     </div>
+                 </div>
+             </div>
+          </div>
+
+          <div className="h-px bg-slate-800" />
+
+          {/* Section 1: ZenSpace M/S Control */}
           <div className="space-y-4">
              <h3 className="text-xs font-mono text-slate-500 uppercase tracking-widest flex items-center gap-2">
               <MoveHorizontal size={12} /> ZenSpace Imaging
@@ -110,7 +283,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
           {/* Section 2: Audio Processing */}
           <div className="space-y-4">
             <h3 className="text-xs font-mono text-slate-500 uppercase tracking-widest flex items-center gap-2">
-              <Mic2 size={12} /> Harmonic Processing
+              <Mic2 size={12} /> Harmonic Saturation
             </h3>
 
             <div className="space-y-3">

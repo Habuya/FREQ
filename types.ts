@@ -1,4 +1,5 @@
 
+
 export interface AudioFile {
   name: string;
   url: string;
@@ -39,6 +40,20 @@ export interface AudioSettings {
   bypassAir: boolean;
   stereoWidth: number; // 0.0 to 2.0
   sacredGeometryMode: boolean;
+  
+  // Phase 2: Esoteric Extensions
+  fibonacciAlignment: boolean; // Time-stretching/Breathing
+  phaseLockEnabled: boolean;   // Dynamic Phase Alignment
+  cymaticsMode: boolean;       // Particle Visualization
+  binauralMode: boolean;       // Alpha Waves
+  binauralBeatFreq: number;    // 8-12Hz (Alpha)
+
+  // Phase 3: Harmonic Shaping
+  harmonicWarmth: number;  // 0.0 to 1.0 (Even harmonics)
+  harmonicClarity: number; // 0.0 to 1.0 (Odd harmonics)
+  
+  // Phase 4: Psychoacoustics
+  deepZenBass: number;     // 0.0 to 1.0 (Sub-harmonic synthesis)
 }
 
 export type ProcessState = 'idle' | 'decoding' | 'analyzing' | 'ready' | 'retuning';

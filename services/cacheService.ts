@@ -1,4 +1,5 @@
 
+
 export interface BassHistoryEntry {
   sensitivity: number;
   frequency: number;
@@ -41,58 +42,95 @@ class CacheService {
 
   private async getDB(): Promise<IDBDatabase> {
     if (this.db) return this.db;
-    if (this.connectionPromise) return this.connectionPromise;
-
-    this.connectionPromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-      request.onupgradeneeded = (e) => {
-        const db = (e.target as IDBOpenDBRequest).result;
-        const transaction = (e.target as IDBOpenDBRequest).transaction;
-        
-        if (!db.objectStoreNames.contains(STORE_ANALYSIS)) {
-          db.createObjectStore(STORE_ANALYSIS);
+    
+    // If there is a pending connection that failed, clear it to retry
+    if (this.connectionPromise) {
+        try {
+            return await this.connectionPromise;
+        } catch (e) {
+            this.connectionPromise = null;
         }
-        
-        let bufferStore: IDBObjectStore;
-        if (!db.objectStoreNames.contains(STORE_BUFFERS)) {
-          bufferStore = db.createObjectStore(STORE_BUFFERS);
-        } else {
-          bufferStore = transaction!.objectStore(STORE_BUFFERS);
-        }
+    }
 
-        if (!bufferStore.indexNames.contains('timestamp')) {
-            bufferStore.createIndex('timestamp', 'timestamp', { unique: false });
-        }
-      };
-
-      request.onsuccess = () => {
-        this.db = request.result;
-        
-        // Robust closure handling
-        this.db.onversionchange = () => {
-          this.closeDB();
-        };
-        
-        this.db.onclose = () => {
-           this.closeDB();
-        };
-
-        resolve(this.db);
-      };
-
-      request.onerror = () => {
-        console.error('IndexedDB open error:', request.error);
-        this.closeDB();
-        reject(request.error);
-      };
-      
-      request.onblocked = () => {
-         console.warn("Database open blocked. Please close other tabs of this app.");
-      };
-    });
-
+    this.connectionPromise = this.openDBWithRetry();
     return this.connectionPromise;
+  }
+
+  private openDBWithRetry(attempt = 0): Promise<IDBDatabase> {
+    return new Promise((resolve, reject) => {
+        if (typeof indexedDB === 'undefined') {
+            reject(new Error("IndexedDB not supported"));
+            return;
+        }
+
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+        request.onupgradeneeded = (e) => {
+            const db = (e.target as IDBOpenDBRequest).result;
+            const transaction = (e.target as IDBOpenDBRequest).transaction;
+            
+            if (!db.objectStoreNames.contains(STORE_ANALYSIS)) {
+                db.createObjectStore(STORE_ANALYSIS);
+            }
+            
+            let bufferStore: IDBObjectStore;
+            if (!db.objectStoreNames.contains(STORE_BUFFERS)) {
+                bufferStore = db.createObjectStore(STORE_BUFFERS);
+            } else {
+                bufferStore = transaction!.objectStore(STORE_BUFFERS);
+            }
+
+            if (!bufferStore.indexNames.contains('timestamp')) {
+                bufferStore.createIndex('timestamp', 'timestamp', { unique: false });
+            }
+        };
+
+        request.onsuccess = () => {
+            this.db = request.result;
+            
+            this.db.onversionchange = () => {
+                this.closeDB();
+            };
+            
+            this.db.onclose = () => {
+                this.closeDB();
+            };
+
+            resolve(this.db);
+        };
+
+        request.onerror = () => {
+            console.error('IndexedDB open error:', request.error);
+            this.closeDB();
+            
+            // Recovery strategy for corruption or internal errors
+            if (attempt === 0) {
+                console.warn("Attempting database recovery (delete & recreate)...");
+                const delReq = indexedDB.deleteDatabase(DB_NAME);
+                
+                delReq.onsuccess = () => {
+                    // Retry open recursively
+                    this.openDBWithRetry(1).then(resolve).catch(reject);
+                };
+                
+                delReq.onerror = () => {
+                    // If delete fails, reject original error
+                    reject(request.error);
+                };
+                
+                delReq.onblocked = () => {
+                    console.warn("DB Delete blocked");
+                    reject(request.error);
+                };
+            } else {
+                reject(request.error);
+            }
+        };
+        
+        request.onblocked = () => {
+            console.warn("Database open blocked.");
+        };
+    });
   }
 
   private closeDB() {
@@ -250,7 +288,6 @@ class CacheService {
       // Use performTransaction to handle DB connection retries
       return this.performTransaction(STORE_BUFFERS, 'readwrite', (store) => {
           const index = store.index('timestamp');
-          const entriesToDelete: IDBValidKey[] = [];
           const items: { key: IDBValidKey, size: number }[] = [];
           
           const cursorRequest = index.openCursor(null, 'next'); // Oldest first

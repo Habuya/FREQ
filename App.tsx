@@ -6,7 +6,7 @@ import FileUpload from './components/FileUpload';
 import SettingsModal from './components/SettingsModal';
 import { TuningPreset, TUNING_LABELS } from './types';
 import { useAudioProcessor } from './hooks/useAudioProcessor';
-import { Sparkles, Info, Github, Clock, Activity, Settings2, ShieldCheck, Waves, Music2, RefreshCw, Zap, ArrowRight, Settings } from 'lucide-react';
+import { Sparkles, Info, Github, Clock, Activity, Settings2, ShieldCheck, Waves, Music2, RefreshCw, Zap, ArrowRight, Settings, Loader2 } from 'lucide-react';
 
 const App: React.FC = () => {
   // Use the new Audio Processor Hook
@@ -20,19 +20,46 @@ const App: React.FC = () => {
   const isAlreadyNatureTuned = processor.analysis.detectedPitch < 435 && processor.analysis.detectedPitch > 410;
   
   // Calculate the displayed frequencies based on active preset
-  const displayedPitch = processor.tuningPreset === TuningPreset.STANDARD_440 
-    ? processor.analysis.detectedPitch
-    : processor.analysis.detectedPitch * (processor.tuningPreset / (processor.analysis.detectedPitch || 440));
+  // If comparing, show Source Pitch, else show Target
+  const displayedPitch = processor.isComparing 
+     ? processor.analysis.detectedPitch 
+     : (processor.tuningPreset === TuningPreset.STANDARD_440 
+        ? processor.analysis.detectedPitch
+        : processor.analysis.detectedPitch * (processor.tuningPreset / (processor.analysis.detectedPitch || 440)));
     
-  const displayedBass = processor.tuningPreset === TuningPreset.STANDARD_440
+  const displayedBass = processor.isComparing
     ? processor.analysis.detectedBass
-    : processor.analysis.detectedBass * (processor.tuningPreset / (processor.analysis.detectedPitch || 440));
+    : (processor.tuningPreset === TuningPreset.STANDARD_440
+        ? processor.analysis.detectedBass
+        : processor.analysis.detectedBass * (processor.tuningPreset / (processor.analysis.detectedPitch || 440)));
 
   return (
     <div className="min-h-screen bg-[#0f172a] text-white selection:bg-indigo-500 selection:text-white">
       {/* Background Gradient Orbs */}
       <div className="fixed top-[-20%] left-[-10%] w-[500px] h-[500px] bg-purple-600/20 blur-[120px] rounded-full pointer-events-none" />
       <div className="fixed bottom-[-20%] right-[-10%] w-[500px] h-[500px] bg-indigo-600/20 blur-[120px] rounded-full pointer-events-none" />
+
+      {/* Batch Processing Overlay */}
+      {processor.batchProgress && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+             <div className="bg-slate-900 border border-slate-700 p-8 rounded-2xl shadow-2xl flex flex-col items-center max-w-sm w-full">
+                 <Loader2 size={48} className="text-indigo-400 animate-spin mb-4" />
+                 <h2 className="text-xl font-bold text-white mb-2">Processing Batch</h2>
+                 <p className="text-slate-400 text-sm mb-6">Optimizing harmonics & dithering...</p>
+                 
+                 <div className="w-full bg-slate-800 rounded-full h-2 mb-2 overflow-hidden">
+                     <div 
+                        className="bg-indigo-500 h-full transition-all duration-300"
+                        style={{ width: `${(processor.batchProgress.current / processor.batchProgress.total) * 100}%` }}
+                     />
+                 </div>
+                 <div className="flex justify-between w-full text-xs font-mono text-slate-500">
+                     <span>Track {processor.batchProgress.current} of {processor.batchProgress.total}</span>
+                     <span>{Math.round((processor.batchProgress.current / processor.batchProgress.total) * 100)}%</span>
+                 </div>
+             </div>
+          </div>
+      )}
 
       {/* Settings Modal */}
       <SettingsModal 
@@ -88,6 +115,13 @@ const App: React.FC = () => {
                  <p className="text-slate-500 font-mono text-sm">VISUALIZATION STANDBY</p>
                </div>
              )}
+             
+             {/* Comparison Overlay */}
+             {processor.isComparing && (
+                 <div className="absolute top-4 right-4 z-40 bg-amber-500 text-white text-[10px] font-bold px-2 py-1 rounded shadow-lg animate-pulse">
+                     BYPASS ACTIVE
+                 </div>
+             )}
 
              {/* Analysis State Overlay */}
              {processor.processState === 'analyzing' && (
@@ -105,6 +139,9 @@ const App: React.FC = () => {
               isPlaying={processor.isPlaying || processor.processState === 'analyzing'} 
               fundamentalHz={displayedPitch} 
               bassHz={displayedBass}
+              cymaticsMode={processor.audioSettings.cymaticsMode}
+              phaseLockEnabled={processor.audioSettings.phaseLockEnabled}
+              deepZenBass={processor.audioSettings.deepZenBass}
             />
           </div>
 
@@ -122,6 +159,9 @@ const App: React.FC = () => {
                 isDownloading={processor.isDownloading}
                 fileName={processor.file.name}
                 thdValue={processor.analysis.currentTHD}
+                isComparing={processor.isComparing}
+                onToggleCompare={processor.toggleCompare}
+                batchCount={processor.batchQueue.length}
               />
 
               {/* Info Cards */}
@@ -219,22 +259,22 @@ const App: React.FC = () => {
                     </h4>
                     
                     <div className="mb-3">
-                         <div className="text-2xl font-bold text-white font-mono tracking-tight">
-                             {processor.tuningPreset} Hz
+                         <div className={`text-2xl font-bold font-mono tracking-tight ${processor.isComparing ? 'text-amber-500 line-through decoration-slate-500' : 'text-white'}`}>
+                             {processor.isComparing ? processor.analysis.detectedPitch.toFixed(1) : processor.tuningPreset} Hz
                          </div>
                          <div className="text-xs text-slate-400">
-                             {TUNING_LABELS[processor.tuningPreset]}
+                             {processor.isComparing ? "BYPASSED (ORIGINAL)" : TUNING_LABELS[processor.tuningPreset]}
                          </div>
                     </div>
                     
                     <div className="space-y-1">
                         <div className="flex justify-between text-xs border-b border-slate-700/50 pb-1 mb-1">
                             <span className="text-slate-500">Pitch Shift</span>
-                            <span className="text-emerald-300 font-mono">{processor.helpers.getShiftPercentage()}</span>
+                            <span className="text-emerald-300 font-mono">{processor.isComparing ? "0%" : processor.helpers.getShiftPercentage()}</span>
                         </div>
                         <div className="flex justify-between text-xs border-b border-slate-700/50 pb-1 mb-1">
                             <span className="text-slate-500">Time Dilation</span>
-                            <span className="text-emerald-300 font-mono">{processor.helpers.getAddedTime()}</span>
+                            <span className="text-emerald-300 font-mono">{processor.isComparing ? "0s" : processor.helpers.getAddedTime()}</span>
                         </div>
                     </div>
                   </div>

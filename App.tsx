@@ -1,4 +1,5 @@
 
+
 import React, { useState } from 'react';
 import Visualizer from './components/Visualizer';
 import ControlPanel from './components/ControlPanel';
@@ -32,6 +33,9 @@ const App: React.FC = () => {
     : (processor.tuningPreset === TuningPreset.STANDARD_440
         ? processor.analysis.detectedBass
         : processor.analysis.detectedBass * (processor.tuningPreset / (processor.analysis.detectedPitch || 440)));
+  
+  // Resolve active preset name
+  const activePresetName = processor.presets.list.find(p => p.id === processor.presets.currentId)?.name;
 
   return (
     <div className="min-h-screen bg-[#0f172a] text-white selection:bg-indigo-500 selection:text-white">
@@ -68,6 +72,7 @@ const App: React.FC = () => {
         settings={processor.audioSettings}
         onUpdate={processor.updateSettings}
         detectedBass={processor.analysis.detectedBass}
+        presets={processor.presets}
       />
 
       <main className="container mx-auto px-4 py-8 relative z-10 max-w-4xl">
@@ -162,6 +167,7 @@ const App: React.FC = () => {
                 isComparing={processor.isComparing}
                 onToggleCompare={processor.toggleCompare}
                 batchCount={processor.batchQueue.length}
+                activePresetName={activePresetName}
               />
 
               {/* Info Cards */}

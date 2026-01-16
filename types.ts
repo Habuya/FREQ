@@ -51,9 +51,23 @@ export interface AudioSettings {
   // Phase 3: Harmonic Shaping
   harmonicWarmth: number;  // 0.0 to 1.0 (Even harmonics)
   harmonicClarity: number; // 0.0 to 1.0 (Odd harmonics)
+  timbreMorph: number;     // 0.5 to 2.0 (Formant Shifting)
   
   // Phase 4: Psychoacoustics
   deepZenBass: number;     // 0.0 to 1.0 (Sub-harmonic synthesis)
+  spaceResonance: number;  // 0.0 to 1.0 (Harmonic Reverb - Wet Level)
+  roomScale: number;       // 0.0 to 1.0 (Reverb Decay/Feedback)
+  
+  // Phase 5: Adaptive Mastering
+  autoEqEnabled: boolean;  // Pink Noise Matching
+}
+
+export interface MasteringPreset {
+  id: string;
+  name: string;
+  isFactory: boolean;
+  data: AudioSettings;
+  createdAt: number;
 }
 
 export type ProcessState = 'idle' | 'decoding' | 'analyzing' | 'ready' | 'retuning';

@@ -16,6 +16,8 @@ interface ControlPanelProps {
   isComparing?: boolean;
   onToggleCompare?: (active: boolean) => void;
   batchCount?: number;
+  activePresetName?: string;
+  spectralBalanceScore?: number; // 0-100
 }
 
 const ControlPanel: React.FC<ControlPanelProps> = ({ 
@@ -29,7 +31,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   thdValue = 0,
   isComparing = false,
   onToggleCompare,
-  batchCount = 0
+  batchCount = 0,
+  activePresetName,
+  spectralBalanceScore = 100
 }) => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
@@ -44,6 +48,19 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
     if (val < 1.0) return 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]';
     if (val < 5.0) return 'bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.5)]';
     return 'bg-rose-500 shadow-[0_0_15px_rgba(244,63,94,0.7)]';
+  };
+  
+  // Spectral Balance Color
+  const getBalanceColor = (score: number) => {
+      if (score > 90) return 'text-teal-300';
+      if (score > 70) return 'text-cyan-400';
+      if (score > 50) return 'text-amber-400';
+      return 'text-rose-400';
+  };
+
+  const getBalanceGradient = (score: number) => {
+      // 0 = Unbalanced (Red), 100 = Balanced (Teal)
+      return `linear-gradient(90deg, rgba(244,63,94,0.5) 0%, rgba(20,184,166,${score/100}) 100%)`;
   };
 
   // Numerology: Recursive Digital Root
@@ -61,27 +78,39 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
       <div className="flex flex-col md:flex-row items-center justify-between gap-6">
         
         {/* File Info */}
-        <div className="flex items-center gap-3 w-full md:w-auto overflow-hidden">
-          <div className="w-12 h-12 flex-shrink-0 rounded-full bg-slate-700 flex items-center justify-center text-indigo-400 relative">
-            <Music size={24} />
-            {batchCount > 1 && (
-                <div className="absolute -top-1 -right-1 w-5 h-5 bg-indigo-500 rounded-full flex items-center justify-center text-[10px] text-white font-bold border-2 border-slate-800">
-                    {batchCount}
+        <div className="flex flex-col gap-2 w-full md:w-auto">
+            <div className="flex items-center gap-3 overflow-hidden">
+              <div className="w-12 h-12 flex-shrink-0 rounded-full bg-slate-700 flex items-center justify-center text-indigo-400 relative">
+                <Music size={24} />
+                {batchCount > 1 && (
+                    <div className="absolute -top-1 -right-1 w-5 h-5 bg-indigo-500 rounded-full flex items-center justify-center text-[10px] text-white font-bold border-2 border-slate-800">
+                        {batchCount}
+                    </div>
+                )}
+              </div>
+              <div className="overflow-hidden min-w-0">
+                <h3 className="text-slate-200 font-semibold truncate max-w-[150px] md:max-w-[200px]">
+                  {fileName || "No Audio Loaded"}
+                </h3>
+                <p className="text-slate-400 text-xs uppercase tracking-wider flex items-center gap-1">
+                  {batchCount > 1 ? (
+                      <><Layers size={10} /> Batch Ready ({batchCount} tracks)</>
+                  ) : (
+                      fileName ? "Ready to Zen" : "Waiting for Upload"
+                  )}
+                </p>
+              </div>
+            </div>
+            
+            {/* Active Preset Badge */}
+            {activePresetName && (
+                <div className="flex items-center gap-1.5 px-3 py-1 bg-slate-700/50 rounded-lg border border-slate-600/50 self-start">
+                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_5px_rgba(52,211,153,0.8)]" />
+                   <span className="text-[10px] text-slate-300 font-mono tracking-wide uppercase">
+                      Preset: <span className="text-white font-semibold">{activePresetName}</span>
+                   </span>
                 </div>
             )}
-          </div>
-          <div className="overflow-hidden min-w-0">
-            <h3 className="text-slate-200 font-semibold truncate max-w-[150px] md:max-w-[200px]">
-              {fileName || "No Audio Loaded"}
-            </h3>
-            <p className="text-slate-400 text-xs uppercase tracking-wider flex items-center gap-1">
-              {batchCount > 1 ? (
-                  <><Layers size={10} /> Batch Ready ({batchCount} tracks)</>
-              ) : (
-                  fileName ? "Ready to Zen" : "Waiting for Upload"
-              )}
-            </p>
-          </div>
         </div>
 
         {/* Playback Control */}
@@ -219,26 +248,44 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
       </div>
       
-      {/* THD / Saturation Visualization (Only when playing or active) */}
+      {/* Meters (THD + Spectral Balance) */}
       {isPlaying && (
-         <div className="mt-4 pt-4 border-t border-slate-700/50 flex items-center justify-between animate-in fade-in slide-in-from-top-1">
-             <span className="text-[10px] text-slate-500 font-mono tracking-widest uppercase flex items-center gap-2">
-                Harmonic Coloration
-                <span className={`font-bold transition-colors ${getTHDColor(thdValue)}`}>
-                    {thdValue.toFixed(2)}%
-                </span>
-             </span>
+         <div className="mt-4 pt-4 border-t border-slate-700/50 grid grid-cols-1 md:grid-cols-2 gap-4 animate-in fade-in slide-in-from-top-1">
              
-             <div className="w-1/2 md:w-64 h-1.5 bg-slate-700 rounded-full overflow-hidden relative">
-                 {/* Background tick marks */}
-                 <div className="absolute inset-0 flex justify-between px-1">
-                     {[...Array(5)].map((_, i) => <div key={i} className="w-px h-full bg-slate-900/50" />)}
+             {/* 1. THD / Saturation */}
+             <div className="flex flex-col gap-1">
+                 <div className="flex justify-between items-center text-[9px] text-slate-500 font-mono uppercase">
+                    <span>Harmonic Coloration</span>
+                    <span className={getTHDColor(thdValue)}>{thdValue.toFixed(2)}%</span>
                  </div>
-                 <div 
-                    className={`h-full rounded-full transition-all duration-300 ease-out ${getTHDBarColor(thdValue)}`}
-                    style={{ width: `${Math.min(100, thdValue * 15)}%` }} // Scaling factor for visual
-                 />
+                 <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden relative">
+                     <div 
+                        className={`h-full rounded-full transition-all duration-300 ease-out ${getTHDBarColor(thdValue)}`}
+                        style={{ width: `${Math.min(100, thdValue * 15)}%` }} 
+                     />
+                 </div>
              </div>
+
+             {/* 2. Spectral Balance (Pink Noise Match) */}
+             <div className="flex flex-col gap-1">
+                 <div className="flex justify-between items-center text-[9px] text-slate-500 font-mono uppercase">
+                    <span>Spectral Balance</span>
+                    <span className={getBalanceColor(spectralBalanceScore)}>
+                        {spectralBalanceScore.toFixed(0)}% Match
+                    </span>
+                 </div>
+                 <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden relative">
+                     <div 
+                        className="h-full rounded-full transition-all duration-700 ease-in-out"
+                        style={{ 
+                            width: `${spectralBalanceScore}%`,
+                            background: getBalanceGradient(spectralBalanceScore),
+                            boxShadow: `0 0 10px rgba(20,184,166,${spectralBalanceScore/200})`
+                        }} 
+                     />
+                 </div>
+             </div>
+
          </div>
       )}
     </div>

@@ -1,10 +1,8 @@
 
 
-
-
-import React from 'react';
-import { X, RotateCcw, Activity, Mic2, Cpu, Sliders, MoveHorizontal, Pyramid, Waves, Eye, Clock, Zap, Info, Magnet, Speaker } from 'lucide-react';
-import { AudioSettings, SaturationType } from '../types';
+import React, { useState } from 'react';
+import { X, RotateCcw, Activity, Mic2, Cpu, Sliders, MoveHorizontal, Pyramid, Waves, Eye, Clock, Zap, Info, Magnet, Speaker, Save, Trash2, ChevronDown, Bookmark, Fingerprint, Globe, Gauge } from 'lucide-react';
+import { AudioSettings, SaturationType, MasteringPreset } from '../types';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -12,10 +10,47 @@ interface SettingsModalProps {
   settings: AudioSettings;
   onUpdate: (newSettings: AudioSettings) => void;
   detectedBass?: number;
+  presets: {
+      list: MasteringPreset[];
+      currentId: string;
+      load: (id: string) => void;
+      save: (name: string) => Promise<void>;
+      delete: (id: string) => Promise<void>;
+  };
 }
 
-const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings, onUpdate, detectedBass = 0 }) => {
+const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings, onUpdate, detectedBass = 0, presets }) => {
   if (!isOpen) return null;
+
+  const [isPresetMenuOpen, setIsPresetMenuOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [newPresetName, setNewPresetName] = useState('');
+
+  const activePreset = presets.list.find(p => p.id === presets.currentId);
+  
+  // Basic deep compare to check if modified
+  const isModified = activePreset 
+     ? JSON.stringify(activePreset.data) !== JSON.stringify(settings)
+     : true;
+
+  const handleSaveClick = () => {
+      setIsSaving(true);
+      setNewPresetName(`Custom Preset ${presets.list.filter(p => !p.isFactory).length + 1}`);
+  };
+
+  const confirmSave = async () => {
+      if (newPresetName.trim()) {
+          await presets.save(newPresetName);
+          setIsSaving(false);
+      }
+  };
+  
+  const handleDelete = async (id: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (window.confirm("Delete this preset?")) {
+          await presets.delete(id);
+      }
+  };
 
   const handleReset = () => {
     onUpdate({
@@ -34,7 +69,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
       binauralBeatFreq: 8,
       harmonicWarmth: 0.0,
       harmonicClarity: 0.0,
-      deepZenBass: 0.0
+      timbreMorph: 1.0,
+      deepZenBass: 0.0,
+      spaceResonance: 0.0,
+      roomScale: 0.5,
+      autoEqEnabled: false
     });
   };
 
@@ -67,24 +106,112 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
       />
 
       {/* Modal Content */}
-      <div className="relative bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl animate-in fade-in zoom-in-95 duration-200 overflow-y-auto max-h-[90vh]">
+      <div className="relative bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl animate-in fade-in zoom-in-95 duration-200 overflow-y-auto max-h-[90vh] flex flex-col">
         
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-slate-800">
-          <h2 className="text-lg font-bold text-white flex items-center gap-2">
-            <Cpu size={18} className="text-indigo-400" />
-            DSP Configuration
-          </h2>
-          <button 
-            onClick={onClose}
-            className="text-slate-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-slate-800"
-          >
-            <X size={20} />
-          </button>
+        {/* Header: Preset Command Center */}
+        <div className="bg-slate-800/80 backdrop-blur border-b border-slate-700 p-4 sticky top-0 z-20">
+            <div className="flex justify-between items-start mb-3">
+                 <div className="flex flex-col">
+                    <span className="text-[10px] text-indigo-400 font-mono tracking-widest uppercase mb-1 flex items-center gap-1">
+                        <Cpu size={10} /> Mastering Preset
+                    </span>
+                    
+                    {isSaving ? (
+                        <div className="flex items-center gap-2 animate-in fade-in slide-in-from-left-2">
+                            <input 
+                                type="text"
+                                value={newPresetName}
+                                onChange={(e) => setNewPresetName(e.target.value)}
+                                className="bg-slate-900 border border-slate-600 text-white text-sm px-2 py-1 rounded focus:border-indigo-500 outline-none w-40"
+                                autoFocus
+                                onKeyDown={(e) => e.key === 'Enter' && confirmSave()}
+                            />
+                            <button onClick={confirmSave} className="bg-indigo-600 text-white p-1 rounded hover:bg-indigo-500"><Save size={14}/></button>
+                            <button onClick={() => setIsSaving(false)} className="bg-slate-700 text-slate-300 p-1 rounded hover:bg-slate-600"><X size={14}/></button>
+                        </div>
+                    ) : (
+                        <div className="relative">
+                            <button 
+                                onClick={() => setIsPresetMenuOpen(!isPresetMenuOpen)}
+                                className="flex items-center gap-2 text-white font-bold text-lg hover:text-indigo-300 transition-colors"
+                            >
+                                {activePreset ? activePreset.name : "Custom Configuration"}
+                                {isModified && <span className="text-[10px] bg-slate-700 text-slate-400 px-1.5 py-0.5 rounded font-normal ml-1">Modified</span>}
+                                <ChevronDown size={16} className={`text-slate-500 transition-transform ${isPresetMenuOpen ? 'rotate-180' : ''}`}/>
+                            </button>
+
+                            {isPresetMenuOpen && (
+                                <>
+                                    <div className="fixed inset-0 z-10" onClick={() => setIsPresetMenuOpen(false)}/>
+                                    <div className="absolute top-full left-0 mt-2 w-64 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl z-20 max-h-60 overflow-y-auto">
+                                        {presets.list.map(preset => (
+                                            <div 
+                                                key={preset.id}
+                                                onClick={() => { presets.load(preset.id); setIsPresetMenuOpen(false); }}
+                                                className={`
+                                                    px-4 py-3 text-sm flex items-center justify-between cursor-pointer border-b border-slate-700/50 last:border-0
+                                                    ${preset.id === presets.currentId ? 'bg-indigo-900/30 text-indigo-300' : 'text-slate-300 hover:bg-slate-700'}
+                                                `}
+                                            >
+                                                <div className="flex flex-col">
+                                                    <span className="font-medium">{preset.name}</span>
+                                                    {preset.isFactory && <span className="text-[9px] text-slate-500 uppercase tracking-wider">Factory</span>}
+                                                </div>
+                                                {!preset.isFactory && (
+                                                    <button 
+                                                        onClick={(e) => handleDelete(preset.id, e)}
+                                                        className="text-slate-600 hover:text-rose-500 p-1 rounded"
+                                                    >
+                                                        <Trash2 size={14} />
+                                                    </button>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    )}
+                 </div>
+
+                 <div className="flex gap-2">
+                     <button 
+                        onClick={handleSaveClick}
+                        className="p-2 text-slate-400 hover:text-indigo-400 bg-slate-700/50 hover:bg-slate-700 rounded-lg transition-colors"
+                        title="Save as Preset"
+                     >
+                         <Save size={18} />
+                     </button>
+                     <button 
+                        onClick={onClose}
+                        className="p-2 text-slate-400 hover:text-white bg-slate-700/50 hover:bg-slate-700 rounded-lg transition-colors"
+                     >
+                         <X size={18} />
+                     </button>
+                 </div>
+            </div>
+            
+            <div className="flex gap-2 mt-2 overflow-x-auto pb-1 no-scrollbar">
+                 {/* Quick Chips for Factory Presets */}
+                 {presets.list.filter(p => p.isFactory).slice(0, 3).map(p => (
+                     <button
+                        key={p.id}
+                        onClick={() => presets.load(p.id)}
+                        className={`
+                           flex-shrink-0 text-[10px] px-2 py-1 rounded-full border transition-all
+                           ${presets.currentId === p.id 
+                              ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300' 
+                              : 'bg-slate-900 border-slate-700 text-slate-500 hover:border-slate-500'}
+                        `}
+                     >
+                         {p.name}
+                     </button>
+                 ))}
+            </div>
         </div>
 
         {/* Body */}
-        <div className="p-6 space-y-8">
+        <div className="p-6 space-y-8 flex-1">
           
           {/* Section: Esoteric Features (Phase 2) */}
            <div className="space-y-4">
@@ -180,11 +307,14 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
                           intensity = settings.harmonicClarity;
                        }
                        
+                       // Apply Morph to visual position (approx)
+                       const shift = (settings.timbreMorph - 1.0) * 10;
+                       
                        const height = 10 + (intensity * 90);
                        const colorClass = n===1 ? 'bg-slate-600' : isEven ? 'bg-amber-500' : 'bg-cyan-500';
                        
                        return (
-                          <div key={n} className="w-full flex flex-col items-center gap-1 group/bar">
+                          <div key={n} className="w-full flex flex-col items-center gap-1 group/bar" style={{ transform: `translateY(${shift}px)` }}>
                               <div 
                                 className={`w-full rounded-t-sm transition-all duration-300 ${colorClass}`} 
                                 style={{ height: `${height}%`, opacity: 0.3 + (intensity * 0.7) }}
@@ -196,6 +326,29 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
                  </div>
 
                  <div className="space-y-4">
+                     {/* Timbre Morph Slider */}
+                     <div className="space-y-2 pb-4 border-b border-slate-700/50">
+                         <div className="flex justify-between items-center text-xs">
+                             <span className="text-pink-300 flex items-center gap-1.5"><Fingerprint size={12}/> Timbre Morph</span>
+                             <span className="font-mono text-pink-400">
+                                {settings.timbreMorph < 1 ? "Darker" : settings.timbreMorph > 1 ? "Aetheric" : "Neutral"} ({settings.timbreMorph.toFixed(2)}x)
+                             </span>
+                         </div>
+                         <div className="relative flex items-center">
+                            <input 
+                                type="range" min="0.5" max="1.5" step="0.01"
+                                value={settings.timbreMorph}
+                                onChange={(e) => onUpdate({...settings, timbreMorph: Number(e.target.value)})}
+                                className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-pink-500 relative z-10"
+                            />
+                            {/* Center Marker */}
+                            <div className="absolute left-1/2 w-0.5 h-3 bg-slate-500 -translate-x-1/2 rounded-full"></div>
+                         </div>
+                         <p className="text-[9px] text-slate-500 text-center">
+                            Shifts spectral formant envelope. Use &lt; 1.0 to preserve body when pitching down.
+                         </p>
+                     </div>
+
                      {/* Warmth Control */}
                      <div className="space-y-1">
                          <div className="flex justify-between text-xs">
@@ -248,33 +401,83 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
 
           <div className="h-px bg-slate-800" />
 
-          {/* Section 1: ZenSpace M/S Control */}
+          {/* Section 1: ZenSpace M/S Control & SPATIAL ENVIRONMENT */}
           <div className="space-y-4">
              <h3 className="text-xs font-mono text-slate-500 uppercase tracking-widest flex items-center gap-2">
-              <MoveHorizontal size={12} /> ZenSpace Imaging
+              <MoveHorizontal size={12} /> ZenSpace Imaging & Environment
             </h3>
-            <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                    <span className="text-slate-300">Stereo Width (M/S)</span>
-                    <span className="text-indigo-400 font-mono">{(settings.stereoWidth * 100).toFixed(0)}%</span>
+            
+            <div className="space-y-4">
+                {/* Stereo Width */}
+                <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                        <span className="text-slate-300">Stereo Width (M/S)</span>
+                        <span className="text-indigo-400 font-mono">{(settings.stereoWidth * 100).toFixed(0)}%</span>
+                    </div>
+                    <input 
+                        type="range"
+                        min="0"
+                        max="2.0"
+                        step="0.1"
+                        value={settings.stereoWidth}
+                        onChange={(e) => onUpdate({ ...settings, stereoWidth: parseFloat(e.target.value) })}
+                        className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                    />
+                     <div className="flex justify-between text-[10px] text-slate-600 font-mono">
+                        <span>Mono (0%)</span>
+                        <span>Normal (100%)</span>
+                        <span>Wide (200%)</span>
+                    </div>
                 </div>
-                <input 
-                    type="range"
-                    min="0"
-                    max="2.0"
-                    step="0.1"
-                    value={settings.stereoWidth}
-                    onChange={(e) => onUpdate({ ...settings, stereoWidth: parseFloat(e.target.value) })}
-                    className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                />
-                 <div className="flex justify-between text-[10px] text-slate-600 font-mono">
-                    <span>Mono (0%)</span>
-                    <span>Normal (100%)</span>
-                    <span>Wide (200%)</span>
+
+                {/* Spatial Environment (Harmonic Reverb) */}
+                <div className="space-y-3 pt-3 border-t border-slate-800/50">
+                    <div className="flex items-center justify-between">
+                       <span className="text-blue-300 flex items-center gap-2 text-sm"><Globe size={14}/> Spatial Environment</span>
+                       <div className="group relative">
+                           <Info size={12} className="text-slate-500 cursor-help" />
+                           <div className="absolute right-0 bottom-full mb-2 w-56 p-2 bg-slate-800 text-[10px] text-slate-300 rounded border border-slate-600 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                              Harmonic Reverb: Creates a virtual space that resonates mathematically with the target frequency. Prevents dissonance in the decay tail.
+                           </div>
+                       </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-4">
+                        {/* Wet Level */}
+                        <div className="space-y-1">
+                            <div className="flex justify-between text-xs">
+                                <span className="text-slate-400">Space Resonance</span>
+                                <span className="text-blue-400 font-mono">{(settings.spaceResonance * 100).toFixed(0)}%</span>
+                            </div>
+                            <input 
+                                type="range"
+                                min="0"
+                                max="1.0"
+                                step="0.05"
+                                value={settings.spaceResonance}
+                                onChange={(e) => onUpdate({ ...settings, spaceResonance: parseFloat(e.target.value) })}
+                                className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                            />
+                        </div>
+                        
+                        {/* Decay/Feedback */}
+                        <div className="space-y-1">
+                            <div className="flex justify-between text-xs">
+                                <span className="text-slate-400">Room Scale</span>
+                                <span className="text-blue-400 font-mono">{(settings.roomScale * 100).toFixed(0)}%</span>
+                            </div>
+                            <input 
+                                type="range"
+                                min="0"
+                                max="1.0"
+                                step="0.05"
+                                value={settings.roomScale || 0.5}
+                                onChange={(e) => onUpdate({ ...settings, roomScale: parseFloat(e.target.value) })}
+                                className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                            />
+                        </div>
+                    </div>
                 </div>
-                <p className="text-xs text-slate-500 leading-relaxed mt-2">
-                  Expands the side channel (L-R) for a wider soundstage without affecting the mono bass foundation. "Air" EQ is applied exclusively to the expanded space.
-                </p>
             </div>
           </div>
 
@@ -349,6 +552,21 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
                      </p>
                   )}
                </div>
+               
+               {/* Adaptive Auto-EQ Toggle */}
+               <div className="pb-3 border-b border-slate-700/50 pt-1">
+                  <Toggle 
+                    label={<span className="font-medium text-teal-200">Adaptive Spectral Balance</span>}
+                    icon={<Gauge size={14} className="text-teal-400" />}
+                    checked={settings.autoEqEnabled} 
+                    onChange={(v) => onUpdate({...settings, autoEqEnabled: v})}
+                  />
+                  {settings.autoEqEnabled && (
+                      <p className="mt-2 text-[10px] text-teal-500/80 italic pl-6">
+                          Real-time analysis active. Balancing energy towards -3dB/Oct Pink Noise curve.
+                      </p>
+                  )}
+               </div>
 
                <div className="space-y-3 pt-1">
                  <p className="text-[10px] text-slate-500 font-mono uppercase mb-2">Manual Bypass</p>
@@ -420,7 +638,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
         </div>
 
         {/* Footer */}
-        <div className="p-4 bg-slate-800/50 rounded-b-2xl border-t border-slate-800 flex justify-between items-center">
+        <div className="p-4 bg-slate-800/50 rounded-b-2xl border-t border-slate-800 flex justify-between items-center sticky bottom-0 z-10 backdrop-blur">
             <button 
                 onClick={handleReset}
                 className="text-xs text-slate-500 hover:text-white flex items-center gap-1.5 transition-colors"

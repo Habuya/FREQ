@@ -1,17 +1,9 @@
 
 
-
-
-
-
-
-
-
-
 import { useState, useEffect, useRef } from 'react';
 import { audioService } from '../services/audioService';
 import { cacheService } from '../services/cacheService';
-import { TuningPreset, AudioSettings, ProcessState } from '../types';
+import { TuningPreset, AudioSettings, ProcessState, MasteringPreset } from '../types';
 import JSZip from 'jszip';
 
 export const useAudioProcessor = () => {
@@ -39,12 +31,17 @@ export const useAudioProcessor = () => {
 
   // Real-time Metrics
   const [currentTHD, setCurrentTHD] = useState<number>(0);
+  const [spectralBalanceScore, setSpectralBalanceScore] = useState<number>(100);
   const thdIntervalRef = useRef<number | null>(null);
 
   // Settings State
   const [sensitivity, setSensitivity] = useState<number>(50);
   const [bassSensitivity, setBassSensitivity] = useState<number>(50);
   const [isReanalyzing, setIsReanalyzing] = useState<boolean>(false);
+  
+  // Presets State
+  const [presets, setPresets] = useState<MasteringPreset[]>([]);
+  const [currentPresetId, setCurrentPresetId] = useState<string>('factory_clean');
   
   const [audioSettings, setAudioSettings] = useState<AudioSettings>({
     fftSize: 8192,
@@ -64,13 +61,28 @@ export const useAudioProcessor = () => {
     // Phase 3 Defaults
     harmonicWarmth: 0.0,
     harmonicClarity: 0.0,
+    timbreMorph: 1.0,
     // Phase 4 Defaults
-    deepZenBass: 0.0
+    deepZenBass: 0.0,
+    spaceResonance: 0.0,
+    roomScale: 0.5,
+    // Phase 5 Defaults
+    autoEqEnabled: false
   });
+
+  // Load presets on mount
+  useEffect(() => {
+    cacheService.getAllPresets().then(loadedPresets => {
+        setPresets(loadedPresets);
+    });
+  }, []);
 
   // Actions
   const updateSettings = (newSettings: AudioSettings) => {
     setAudioSettings(newSettings);
+    // If settings change manually, we are technically no longer on the preset "cleanly"
+    // but we keep the ID for reference unless logic dictates setting it to null
+    
     audioService.updateVisualizerSettings(newSettings.fftSize, newSettings.smoothingTimeConstant);
     
     if (newSettings.saturationType !== audioSettings.saturationType) {
@@ -88,17 +100,55 @@ export const useAudioProcessor = () => {
     audioService.setPhaseLockEnabled(newSettings.phaseLockEnabled);
     audioService.setBinauralMode(newSettings.binauralMode, newSettings.binauralBeatFreq);
     
-    // Phase 3: Harmonic Shaping
-    audioService.setHarmonicShaping(newSettings.harmonicWarmth, newSettings.harmonicClarity);
+    // Phase 3: Harmonic Shaping & Timbre Morph
+    audioService.setHarmonicShaping(newSettings.harmonicWarmth, newSettings.harmonicClarity, newSettings.timbreMorph);
     
-    // Phase 4: Psychoacoustic Bass
+    // Phase 4: Psychoacoustic Bass & Harmonic Reverb
     audioService.setDeepZenBass(newSettings.deepZenBass);
+    audioService.setSpaceResonance(newSettings.spaceResonance);
+    audioService.setRoomScale(newSettings.roomScale);
+    
+    // Phase 5: Auto-EQ
+    audioService.setAutoEqEnabled(newSettings.autoEqEnabled);
 
     audioService.setEQBypass({
       body: newSettings.bypassBody,
       resonance: newSettings.bypassResonance,
       air: newSettings.bypassAir
     });
+  };
+
+  const savePreset = async (name: string) => {
+      const newPreset: MasteringPreset = {
+          id: `custom_${Date.now()}`,
+          name: name,
+          isFactory: false,
+          data: { ...audioSettings }, // Snapshot
+          createdAt: Date.now()
+      };
+      
+      await cacheService.savePreset(newPreset);
+      const updatedList = await cacheService.getAllPresets();
+      setPresets(updatedList);
+      setCurrentPresetId(newPreset.id);
+  };
+
+  const deletePreset = async (id: string) => {
+      await cacheService.deletePreset(id);
+      const updatedList = await cacheService.getAllPresets();
+      setPresets(updatedList);
+      if (currentPresetId === id) {
+          setCurrentPresetId(updatedList[0]?.id || '');
+          if (updatedList[0]) updateSettings(updatedList[0].data);
+      }
+  };
+
+  const loadPreset = (id: string) => {
+      const preset = presets.find(p => p.id === id);
+      if (preset) {
+          setCurrentPresetId(id);
+          updateSettings(preset.data);
+      }
   };
 
   const loadFile = async (files: File[]) => {
@@ -119,6 +169,7 @@ export const useAudioProcessor = () => {
       setIsBufferCached(false);
       setDetectedBass(0);
       setCurrentTHD(0);
+      setSpectralBalanceScore(100);
       setIsComparing(false); // Reset comparison mode
       
       // 1. Buffer Cache Handling
@@ -240,19 +291,26 @@ export const useAudioProcessor = () => {
       audioService.toggleBypass(active);
   };
 
-  // THD Polling Loop
+  // Metrics Polling Loop
   useEffect(() => {
     if (isPlaying) {
         thdIntervalRef.current = window.setInterval(() => {
-            const val = audioService.calculateTHD();
-            if (val !== -1) { // -1 means throttled
-                // Smooth interpolation for visual stability
-                setCurrentTHD(prev => prev + (val - prev) * 0.2);
+            // THD
+            const thd = audioService.calculateTHD();
+            if (thd !== -1) { 
+                setCurrentTHD(prev => prev + (thd - prev) * 0.2);
             }
+            
+            // Spectral Balance Score (only if active or just visualization)
+            // Even if autoEq is off, we can measure the score
+            const score = audioService.getSpectralBalanceScore();
+            setSpectralBalanceScore(prev => prev + (score - prev) * 0.1); // Smooth transition
+
         }, 150);
     } else {
         if (thdIntervalRef.current) clearInterval(thdIntervalRef.current);
         setCurrentTHD(0);
+        // Don't reset score to 0 on pause, keep last known or default 100
     }
 
     return () => {
@@ -281,36 +339,42 @@ export const useAudioProcessor = () => {
               const currentFile = batchQueue[i];
               setBatchProgress({ current: i + 1, total: batchQueue.length });
               
-              // We need to determine the Pitch/Bass for each file if not already analyzed
-              // This is a simplified batch flow that analyzes on fly or uses default
-              
               // 1. Decode Offline
               const buffer = await audioService.decodeFileOffline(currentFile);
               
-              // 2. Quick Analyze (or load cache)
-              // Note: For true batching, we might skip deep analysis for speed and assume 440 or use standard detect
-              // Here we try to load cache first
+              // 2. Smart Analysis (Cache -> On-Fly Fallback)
               let filePitch = 440;
               let fileBass = 0;
+              let phaseOffset = 0;
               
-              const cached = await cacheService.loadAnalysis(currentFile, 50);
+              const cached = await cacheService.loadAnalysis(currentFile, sensitivity); // Use current sensitivity settings
+
               if (cached) {
                   filePitch = cached.pitch;
                   fileBass = cached.bassPitch || 0;
+                  // Note: Phase offset isn't cached in DB currently, so we might re-detect if needed for perfection
+                  if (audioSettings.phaseLockEnabled && fileBass > 20) {
+                      phaseOffset = await audioService.detectPhase(buffer, fileBass);
+                  }
               } else {
-                  // Fallback: If not analyzing every file, we assume standard A440 for batch speed
-                  // or we could run the worker. For now, assume 440 to avoid massive wait times on main thread
-                  // unless we implement full queue worker logic.
-                  filePitch = 440; 
+                  // Fallback: Analyze On-Fly (Batch Quality Assurance)
+                  // Passing 'false' to updateState so we don't disrupt the main UI/Visualizer
+                  filePitch = await audioService.detectInherentTuning(sensitivity, buffer);
+                  fileBass = await audioService.detectBassRoot(bassSensitivity, buffer, false);
+                  
+                  if (audioSettings.phaseLockEnabled && fileBass > 20) {
+                      phaseOffset = await audioService.detectPhase(buffer, fileBass);
+                  }
               }
 
-              // 3. Process
+              // 3. Process with per-file harmonics
               const blob = await audioService.processOffline(
                   buffer, 
                   tuningPreset, 
                   fileBass, 
                   filePitch,
-                  audioSettings // Pass current settings for harmonic shaping & deep zen bass
+                  audioSettings,
+                  phaseOffset
               );
               
               const originalName = currentFile.name.replace(/\.[^/.]+$/, "");
@@ -391,13 +455,21 @@ export const useAudioProcessor = () => {
     batchProgress,
     tuningPreset,
     audioSettings,
+    presets: {
+        list: presets,
+        currentId: currentPresetId,
+        load: loadPreset,
+        save: savePreset,
+        delete: deletePreset
+    },
     analysis: {
       hasHiResContent,
       detectedPitch,
       detectedBass,
       isCachedResult,
       isBufferCached,
-      currentTHD
+      currentTHD,
+      spectralBalanceScore
     },
     isComparing,
     toggleCompare,

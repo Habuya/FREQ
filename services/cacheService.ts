@@ -1,4 +1,4 @@
-
+import { MasteringPreset, AudioSettings } from '../types';
 
 export interface BassHistoryEntry {
   sensitivity: number;
@@ -28,19 +28,110 @@ interface StoredFileAnalysis {
 }
 
 const DB_NAME = 'ZenTunerDB';
-const DB_VERSION = 2; 
+const DB_VERSION = 3; 
 const STORE_ANALYSIS = 'analysis';
 const STORE_BUFFERS = 'audio_buffers';
+const STORE_PRESETS = 'presets';
 
 // Limits for LRU Strategy
 const MAX_CACHED_TRACKS = 5; 
 const MAX_CACHE_SIZE_BYTES = 500 * 1024 * 1024; // 500 MB Limit
 
+// Factory Defaults (Updated based on requirements)
+const DEFAULT_PRESETS: MasteringPreset[] = [
+  {
+    id: 'factory_pure_zen',
+    name: 'Pure Zen (432Hz)',
+    isFactory: true,
+    createdAt: 0,
+    data: {
+      fftSize: 8192,
+      smoothingTimeConstant: 0.8,
+      saturationType: 'clean',
+      bypassBody: false,
+      bypassResonance: false,
+      bypassAir: false,
+      stereoWidth: 1.0,
+      sacredGeometryMode: true,
+      fibonacciAlignment: true,
+      phaseLockEnabled: true,
+      cymaticsMode: false,
+      binauralMode: false,
+      binauralBeatFreq: 8,
+      harmonicWarmth: 0.0,
+      harmonicClarity: 0.0,
+      timbreMorph: 1.0,
+      deepZenBass: 0.0,
+      spaceResonance: 0.0,
+      roomScale: 0.5,
+      autoEqEnabled: true
+    }
+  },
+  {
+    id: 'factory_deep_meditation',
+    name: 'Deep Meditation',
+    isFactory: true,
+    createdAt: 0,
+    data: {
+      fftSize: 8192,
+      smoothingTimeConstant: 0.85,
+      saturationType: 'tape',
+      bypassBody: false,
+      bypassResonance: false,
+      bypassAir: false,
+      stereoWidth: 1.2,
+      sacredGeometryMode: false,
+      fibonacciAlignment: false,
+      phaseLockEnabled: true,
+      cymaticsMode: false,
+      binauralMode: true,
+      binauralBeatFreq: 8,
+      harmonicWarmth: 0.3,
+      harmonicClarity: 0.0,
+      timbreMorph: 1.0,
+      deepZenBass: 0.85,
+      spaceResonance: 0.3,
+      roomScale: 0.8,
+      autoEqEnabled: false
+    }
+  },
+  {
+    id: 'factory_solfeggio_528',
+    name: 'Solfeggio 528',
+    isFactory: true,
+    createdAt: 0,
+    data: {
+      fftSize: 16384, // High Res
+      smoothingTimeConstant: 0.7,
+      saturationType: 'clean',
+      bypassBody: true,
+      bypassResonance: false,
+      bypassAir: false,
+      stereoWidth: 1.1,
+      sacredGeometryMode: false,
+      fibonacciAlignment: false,
+      phaseLockEnabled: false,
+      cymaticsMode: true,
+      binauralMode: false,
+      binauralBeatFreq: 8,
+      harmonicWarmth: 0.0,
+      harmonicClarity: 0.6,
+      timbreMorph: 1.0,
+      deepZenBass: 0.0,
+      spaceResonance: 0.1,
+      roomScale: 0.5,
+      autoEqEnabled: true
+    }
+  }
+];
+
 class CacheService {
   private db: IDBDatabase | null = null;
   private connectionPromise: Promise<IDBDatabase> | null = null;
+  private dbDisabled: boolean = false;
 
   private async getDB(): Promise<IDBDatabase> {
+    if (this.dbDisabled) throw new Error("IndexedDB is disabled");
     if (this.db) return this.db;
     
     // If there is a pending connection that failed, clear it to retry
@@ -49,6 +140,8 @@ class CacheService {
             return await this.connectionPromise;
         } catch (e) {
             this.connectionPromise = null;
+            // If the failure resulted in disabling the DB, fail fast
+            if (this.dbDisabled) throw new Error("IndexedDB is disabled");
         }
     }
 
@@ -59,6 +152,7 @@ class CacheService {
   private openDBWithRetry(attempt = 0): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
         if (typeof indexedDB === 'undefined') {
+            this.dbDisabled = true;
             reject(new Error("IndexedDB not supported"));
             return;
         }
@@ -83,6 +177,14 @@ class CacheService {
             if (!bufferStore.indexNames.contains('timestamp')) {
                 bufferStore.createIndex('timestamp', 'timestamp', { unique: false });
             }
+
+            // New Preset Store
+            let presetStore: IDBObjectStore;
+            if (!db.objectStoreNames.contains(STORE_PRESETS)) {
+                presetStore = db.createObjectStore(STORE_PRESETS, { keyPath: 'id' });
+                // Seed defaults immediately
+                DEFAULT_PRESETS.forEach(preset => presetStore.add(preset));
+            }
         };
 
         request.onsuccess = () => {
@@ -99,36 +201,43 @@ class CacheService {
             resolve(this.db);
         };
 
-        request.onerror = () => {
-            console.error('IndexedDB open error:', request.error);
+        request.onerror = (event) => {
+            event.preventDefault(); // Stop propagation to prevent "Internal error" logs
+            const error = request.error;
+            
             this.closeDB();
             
-            // Recovery strategy for corruption or internal errors
             if (attempt === 0) {
-                console.warn("Attempting database recovery (delete & recreate)...");
-                const delReq = indexedDB.deleteDatabase(DB_NAME);
+                console.warn("IndexedDB initialization warning (attempt 1):", error ? error.message : "Unknown error");
+                console.warn("Attempting database recovery (reset)...");
                 
-                delReq.onsuccess = () => {
-                    // Retry open recursively
-                    this.openDBWithRetry(1).then(resolve).catch(reject);
-                };
-                
-                delReq.onerror = () => {
-                    // If delete fails, reject original error
-                    reject(request.error);
-                };
-                
-                delReq.onblocked = () => {
-                    console.warn("DB Delete blocked");
-                    reject(request.error);
-                };
+                try {
+                    const delReq = indexedDB.deleteDatabase(DB_NAME);
+                    
+                    delReq.onsuccess = () => {
+                        this.openDBWithRetry(1).then(resolve).catch(reject);
+                    };
+                    
+                    delReq.onerror = (e) => {
+                        e.preventDefault();
+                        console.warn("Database reset failed. Disabling persistent storage.");
+                        this.dbDisabled = true;
+                        reject(error);
+                    };
+                } catch (e) {
+                    this.dbDisabled = true;
+                    reject(e);
+                }
             } else {
-                reject(request.error);
+                console.warn("IndexedDB unavailable. App will run in memory-only mode.", error);
+                this.dbDisabled = true;
+                reject(error);
             }
         };
         
-        request.onblocked = () => {
-            console.warn("Database open blocked.");
+        request.onblocked = (event) => {
+            event.preventDefault();
+            console.warn("IndexedDB blocked. Please close other tabs of this app.");
         };
     });
   }
@@ -145,8 +254,6 @@ class CacheService {
     this.connectionPromise = null;
   }
 
-  // --- Robust Transaction Helper ---
-  // Retries transaction if connection is closed or invalid
   private async performTransaction<T>(
     storeName: string,
     mode: IDBTransactionMode,
@@ -162,7 +269,7 @@ class CacheService {
       );
 
       if (isConnectionError) {
-        console.warn('DB closed, retrying transaction...');
+        console.warn('DB closed unexpectedly, retrying transaction...');
         this.closeDB(); // Force reset
         return await this._runTransaction(storeName, mode, operation);
       }
@@ -182,7 +289,7 @@ class CacheService {
       try {
         transaction = db.transaction(storeName, mode);
       } catch (e) {
-        reject(e); // Likely InvalidStateError if DB is closed
+        reject(e); 
         return;
       }
 
@@ -200,12 +307,57 @@ class CacheService {
         resolve(request ? request.result : undefined as T);
       };
 
-      transaction.onerror = () => reject(transaction.error);
+      transaction.onerror = (e) => {
+          e.preventDefault();
+          reject(transaction.error);
+      };
     });
   }
 
   private generateKey(file: File, suffix: string = ''): string {
     return `${file.name}_${file.size}_${file.lastModified}${suffix}`;
+  }
+
+  // --- Presets ---
+  public async getAllPresets(): Promise<MasteringPreset[]> {
+      try {
+          const presets = await this.performTransaction(STORE_PRESETS, 'readonly', (store) => {
+              return store.getAll();
+          }) as MasteringPreset[];
+          
+          if (!presets || presets.length === 0) {
+              return DEFAULT_PRESETS;
+          }
+          return presets.sort((a, b) => {
+              // Factory first, then recent custom
+              if (a.isFactory && !b.isFactory) return -1;
+              if (!a.isFactory && b.isFactory) return 1;
+              return b.createdAt - a.createdAt;
+          });
+      } catch (e) {
+          // Silent fallback to defaults if DB is disabled/broken
+          return DEFAULT_PRESETS;
+      }
+  }
+
+  public async savePreset(preset: MasteringPreset): Promise<void> {
+      try {
+          await this.performTransaction(STORE_PRESETS, 'readwrite', (store) => {
+              return store.put(preset);
+          });
+      } catch (e) {
+          console.warn("Failed to save preset (DB disabled?)", e);
+      }
+  }
+
+  public async deletePreset(id: string): Promise<void> {
+      try {
+          await this.performTransaction(STORE_PRESETS, 'readwrite', (store) => {
+              return store.delete(id);
+          });
+      } catch (e) {
+          console.warn("Failed to delete preset", e);
+      }
   }
 
   // --- Analysis Cache ---
@@ -236,10 +388,10 @@ class CacheService {
            }
            store.put(existing, key);
         };
-        return getRequest; // Return request to keep transaction alive logic consistent, though we act in onsuccess
+        return getRequest; 
       });
     } catch (e) {
-      console.warn('Failed to save analysis', e);
+      // Ignore save errors silently in fallback mode
     }
   }
 
@@ -257,7 +409,6 @@ class CacheService {
          return data;
       }
       
-      // Legacy Fallback (Try old single key format)
       try {
          const oldKey = this.generateKey(file, `_s${sensitivity}`);
          const oldResult = await this.performTransaction(STORE_ANALYSIS, 'readonly', (store) => store.get(oldKey)) as AnalysisData;
@@ -267,7 +418,6 @@ class CacheService {
       }
 
     } catch (e) {
-      console.warn('Failed to load analysis', e);
       return null;
     }
   }
@@ -285,12 +435,11 @@ class CacheService {
   }
 
   private async enforceStorageLimits(incomingSize: number): Promise<void> {
-      // Use performTransaction to handle DB connection retries
       return this.performTransaction(STORE_BUFFERS, 'readwrite', (store) => {
           const index = store.index('timestamp');
           const items: { key: IDBValidKey, size: number }[] = [];
           
-          const cursorRequest = index.openCursor(null, 'next'); // Oldest first
+          const cursorRequest = index.openCursor(null, 'next'); 
 
           cursorRequest.onsuccess = (e) => {
               const cursor = (e.target as IDBRequest).result as IDBCursorWithValue;
@@ -298,7 +447,6 @@ class CacheService {
                   items.push({ key: cursor.primaryKey, size: this.getBufferSize(cursor.value) });
                   cursor.continue();
               } else {
-                  // Cursor done, calculate deletion
                   const totalSize = items.reduce((sum, item) => sum + item.size, 0);
                   let sizeAccumulator = totalSize;
                   let countAccumulator = items.length;
@@ -326,10 +474,8 @@ class CacheService {
       const incomingSize = this.getBufferSize(data);
       data.timestamp = Date.now();
 
-      // Ensure space (this might reconnect the DB)
       await this.enforceStorageLimits(incomingSize);
       
-      // Now save (this might also retry if needed)
       await this.performTransaction(STORE_BUFFERS, 'readwrite', (store) => {
           return store.put(data, key);
       });
@@ -337,12 +483,10 @@ class CacheService {
     } catch (e: any) {
       if (e && e.name === 'QuotaExceededError') {
          console.warn("Quota exceeded. Clearing cache...");
-         this.closeDB(); // Reset connection to be safe
+         this.closeDB(); 
          const db = await this.getDB();
          const trans = db.transaction(STORE_BUFFERS, 'readwrite');
          trans.objectStore(STORE_BUFFERS).clear();
-      } else {
-         console.warn('Failed to save buffer', e);
       }
     }
   }
@@ -356,17 +500,15 @@ class CacheService {
       }) as CachedAudioBuffer;
 
       if (result) {
-         // Touch timestamp asynchronously to update LRU, don't wait
          this.performTransaction(STORE_BUFFERS, 'readwrite', (store) => {
              result.timestamp = Date.now();
              store.put(result, key);
-         }).catch(() => {}); // Ignore errors on touch
+         }).catch(() => {}); 
          return result;
       }
       return null;
 
     } catch (e) {
-      console.warn('Failed to load buffer', e);
       return null;
     }
   }

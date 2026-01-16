@@ -1,3 +1,5 @@
+
+
 import { MasteringPreset, AudioSettings } from '../types';
 
 export interface BassHistoryEntry {
@@ -12,6 +14,7 @@ export interface AnalysisData {
   isHiRes: boolean;
   sensitivity: number;
   bassSensitivity?: number;
+  isBassEstimated?: boolean; // New Flag for Auto-Estimated Fallback
   bassHistory?: BassHistoryEntry[];
 }
 
@@ -64,7 +67,10 @@ const DEFAULT_PRESETS: MasteringPreset[] = [
       deepZenBass: 0.0,
       spaceResonance: 0.0,
       roomScale: 0.5,
-      autoEqEnabled: true
+      breathingEnabled: false,
+      breathingIntensity: 0.0,
+      autoEqEnabled: true,
+      autoEqIntensity: 0.5
     }
   },
   {
@@ -92,7 +98,10 @@ const DEFAULT_PRESETS: MasteringPreset[] = [
       deepZenBass: 0.85,
       spaceResonance: 0.3,
       roomScale: 0.8,
-      autoEqEnabled: false
+      breathingEnabled: true,
+      breathingIntensity: 0.4,
+      autoEqEnabled: false,
+      autoEqIntensity: 0.5
     }
   },
   {
@@ -120,7 +129,10 @@ const DEFAULT_PRESETS: MasteringPreset[] = [
       deepZenBass: 0.0,
       spaceResonance: 0.1,
       roomScale: 0.5,
-      autoEqEnabled: true
+      breathingEnabled: false,
+      breathingIntensity: 0.0,
+      autoEqEnabled: true,
+      autoEqIntensity: 0.6
     }
   }
 ];

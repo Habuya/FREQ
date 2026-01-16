@@ -1,4 +1,6 @@
 
+
+
 import React, { useEffect, useRef, useState } from 'react';
 import { audioService } from '../services/audioService';
 import { Info, X } from 'lucide-react';
@@ -105,6 +107,11 @@ const Visualizer: React.FC<VisualizerProps> = ({
       const PHI = 1.61803398875;
       const baseRadius = Math.min(width, height) * 0.35;
       
+      // Calculate Breathing Pulse for Geometry Size
+      // Matches the LFO logic in AudioService
+      const breathingCycle = (audioService.getCurrentTime() / PHI) % 1;
+      const breathingPulse = Math.pow(Math.sin(breathingCycle * Math.PI * 2) * 0.5 + 0.5, 1.5);
+      
       // Fibonacci Frequency Mapping
       const fibFractions = [
           { n: 1, d: 1, val: 1.0 },
@@ -171,9 +178,12 @@ const Visualizer: React.FC<VisualizerProps> = ({
           speed = 1.2;
       }
 
-      // Phi Scaling for Amplitudes
-      const ampA = baseRadius;
-      const ampB = baseRadius / PHI;
+      // Phi Scaling for Amplitudes + Breath Modulation
+      // The breathing pulse slightly expands/contracts the geometry
+      const breathMod = 1 + (breathingPulse * 0.05 * (deepZenBass > 0 ? 1 : 0.5)); // Subtle scale mod
+      
+      const ampA = baseRadius * breathMod;
+      const ampB = (baseRadius / PHI) * breathMod;
 
       ctx.save();
       ctx.translate(centerX, centerY);
@@ -222,14 +232,11 @@ const Visualizer: React.FC<VisualizerProps> = ({
               blurAmt = 15 + (snapFlash * 35); // Max 50px blur
               lineWidth = 2 + (snapFlash * 3);
           } else {
-              // STABLE: Breathing Mode
-              // Breath cycle based on Fibonacci (approx ~1.6s)
-              const breath = Math.sin(time * 2) * 0.5 + 0.5; // 0 to 1
-              
-              strokeColor = `rgba(52, 211, 153, ${0.4 + breath * 0.3})`; // Emerald breathing
-              shadowColor = `rgba(52, 211, 153, ${0.3 + breath * 0.2})`;
-              blurAmt = 10 + (breath * 10); // Breathe blur 10-20
-              lineWidth = 1.5 + (breath * 0.5);
+              // STABLE: Breathing Mode (Color Modulated by Breath Cycle too)
+              strokeColor = `rgba(52, 211, 153, ${0.4 + breathingPulse * 0.3})`; // Emerald breathing
+              shadowColor = `rgba(52, 211, 153, ${0.3 + breathingPulse * 0.2})`;
+              blurAmt = 10 + (breathingPulse * 10); // Breathe blur 10-20
+              lineWidth = 1.5 + (breathingPulse * 0.5);
           }
       } else {
           // SEARCHING / UNLOCKED

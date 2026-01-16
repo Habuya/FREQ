@@ -53,13 +53,16 @@ export interface AudioSettings {
   harmonicClarity: number; // 0.0 to 1.0 (Odd harmonics)
   timbreMorph: number;     // 0.5 to 2.0 (Formant Shifting)
   
-  // Phase 4: Psychoacoustics
+  // Phase 4: Psychoacoustics & Organic Automation
   deepZenBass: number;     // 0.0 to 1.0 (Sub-harmonic synthesis)
   spaceResonance: number;  // 0.0 to 1.0 (Harmonic Reverb - Wet Level)
   roomScale: number;       // 0.0 to 1.0 (Reverb Decay/Feedback)
+  breathingEnabled: boolean;   // Activates Phi-LFO
+  breathingIntensity: number;  // Modulation strength (0.0 to 1.0)
   
   // Phase 5: Adaptive Mastering
   autoEqEnabled: boolean;  // Pink Noise Matching
+  autoEqIntensity: number; // 0.0 to 1.0 (Strength of correction)
 }
 
 export interface MasteringPreset {

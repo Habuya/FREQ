@@ -72,6 +72,8 @@ const App: React.FC = () => {
         settings={processor.audioSettings}
         onUpdate={processor.updateSettings}
         detectedBass={processor.analysis.detectedBass}
+        isBassEstimated={processor.analysis.isBassEstimated}
+        onReanalyze={processor.reanalyze}
         presets={processor.presets}
       />
 
@@ -152,7 +154,11 @@ const App: React.FC = () => {
 
           {/* Controls or Upload */}
           {!processor.file ? (
-            <FileUpload onFileSelect={processor.loadFile} isLoading={processor.processState === 'decoding'} />
+            <FileUpload 
+              onFileSelect={processor.loadFile} 
+              onUrlImport={processor.loadFromUrl}
+              isLoading={processor.processState === 'decoding'} 
+            />
           ) : (
             <div className={`animate-in fade-in slide-in-from-bottom-4 duration-500 ${processor.processState !== 'ready' ? 'pointer-events-none opacity-50' : ''}`}>
               <ControlPanel 
@@ -200,7 +206,9 @@ const App: React.FC = () => {
                     
                     {processor.analysis.detectedBass > 0 && (
                       <div className="flex justify-between items-center p-2 bg-lime-900/10 rounded-lg border border-lime-500/20">
-                         <span className="text-slate-400 text-xs">Bass Root</span>
+                         <span className="text-slate-400 text-xs">
+                             Bass Root {processor.analysis.isBassEstimated && "(Est)"}
+                         </span>
                          <span className="text-lime-400 font-bold text-sm font-mono flex gap-2">
                            {processor.analysis.detectedBass.toFixed(1)} Hz
                            <span className="opacity-50">|</span>

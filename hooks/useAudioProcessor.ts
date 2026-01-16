@@ -23,6 +23,7 @@ export const useAudioProcessor = () => {
   const [hasHiResContent, setHasHiResContent] = useState<boolean>(false);
   const [detectedPitch, setDetectedPitch] = useState<number>(440);
   const [detectedBass, setDetectedBass] = useState<number>(0);
+  const [isBassEstimated, setIsBassEstimated] = useState<boolean>(false);
   const [isCachedResult, setIsCachedResult] = useState<boolean>(false);
   const [isBufferCached, setIsBufferCached] = useState<boolean>(false);
   
@@ -66,8 +67,11 @@ export const useAudioProcessor = () => {
     deepZenBass: 0.0,
     spaceResonance: 0.0,
     roomScale: 0.5,
+    breathingEnabled: false,
+    breathingIntensity: 0.0,
     // Phase 5 Defaults
-    autoEqEnabled: false
+    autoEqEnabled: false,
+    autoEqIntensity: 0.5
   });
 
   // Load presets on mount
@@ -103,10 +107,11 @@ export const useAudioProcessor = () => {
     // Phase 3: Harmonic Shaping & Timbre Morph
     audioService.setHarmonicShaping(newSettings.harmonicWarmth, newSettings.harmonicClarity, newSettings.timbreMorph);
     
-    // Phase 4: Psychoacoustic Bass & Harmonic Reverb
+    // Phase 4: Psychoacoustic Bass & Harmonic Reverb & Breathing
     audioService.setDeepZenBass(newSettings.deepZenBass);
     audioService.setSpaceResonance(newSettings.spaceResonance);
     audioService.setRoomScale(newSettings.roomScale);
+    audioService.setBreathingEnabled(newSettings.breathingEnabled, newSettings.breathingIntensity);
     
     // Phase 5: Auto-EQ
     audioService.setAutoEqEnabled(newSettings.autoEqEnabled);
@@ -151,6 +156,44 @@ export const useAudioProcessor = () => {
       }
   };
 
+  // --- URL IMPORT LOGIC (New) ---
+  const loadFromUrl = async (url: string) => {
+      try {
+          setProcessState('decoding');
+          
+          // Simulated extraction delay
+          await new Promise(resolve => setTimeout(resolve, 1500));
+
+          // Check if it's a supported direct audio link (basic check)
+          const isDirectAudio = url.match(/\.(mp3|wav|ogg|m4a)$/i);
+          
+          if (isDirectAudio) {
+              try {
+                  const response = await fetch(url);
+                  if (!response.ok) throw new Error("Fetch failed");
+                  const blob = await response.blob();
+                  const filename = url.split('/').pop() || "imported_track.mp3";
+                  const file = new File([blob], filename, { type: blob.type });
+                  await loadFile([file]);
+                  return;
+              } catch (e) {
+                  // Fall through to error
+                  console.warn("Direct fetch failed, likely CORS", e);
+              }
+          }
+
+          // If we reach here, it's either a streaming link (YouTube/Spotify) or CORS blocked
+          // Since we don't have a backend proxy, we must inform the user.
+          setProcessState('idle');
+          alert("Backend Service Unavailable: \n\nDirect import from YouTube/Spotify requires a server-side extraction proxy to bypass CORS and DRM. \n\nThis feature is implemented in the UI for demonstration purposes. Please use the 'Upload' tab with local files.");
+          
+      } catch (e) {
+          console.error("URL Import Error", e);
+          setProcessState('idle');
+          alert("Failed to import from URL.");
+      }
+  };
+
   const loadFile = async (files: File[]) => {
     if (!files || files.length === 0) return;
     
@@ -168,6 +211,7 @@ export const useAudioProcessor = () => {
       setIsCachedResult(false);
       setIsBufferCached(false);
       setDetectedBass(0);
+      setIsBassEstimated(false);
       setCurrentTHD(0);
       setSpectralBalanceScore(100);
       setIsComparing(false); // Reset comparison mode
@@ -210,7 +254,17 @@ export const useAudioProcessor = () => {
         setDetectedPitch(cachedAnalysis.pitch);
         audioService.setSourceReferencePitch(cachedAnalysis.pitch);
         
-        if (cachedAnalysis.bassPitch) setDetectedBass(cachedAnalysis.bassPitch);
+        if (cachedAnalysis.bassPitch) {
+            setDetectedBass(cachedAnalysis.bassPitch);
+            // Restore estimation flag from cache if available
+            if (cachedAnalysis.isBassEstimated !== undefined) {
+                setIsBassEstimated(cachedAnalysis.isBassEstimated);
+            } else {
+                // Heuristic: if exactly 60, assume estimated for safety if undefined
+                setIsBassEstimated(cachedAnalysis.bassPitch === 60); 
+            }
+        }
+        
         if (cachedAnalysis.bassSensitivity !== undefined) setBassSensitivity(cachedAnalysis.bassSensitivity);
 
         setIsCachedResult(true);
@@ -229,13 +283,15 @@ export const useAudioProcessor = () => {
 
         const bassFreq = await audioService.detectBassRoot(50);
         setDetectedBass(bassFreq);
+        setIsBassEstimated(audioService.isBassEstimated);
 
         await cacheService.saveAnalysis(selectedFile, {
           pitch: detected,
           bassPitch: bassFreq,
           isHiRes: isHiRes,
           sensitivity: 50,
-          bassSensitivity: 50
+          bassSensitivity: 50,
+          isBassEstimated: audioService.isBassEstimated
         });
 
         setTuningPreset(TuningPreset.STANDARD_440); 
@@ -262,6 +318,7 @@ export const useAudioProcessor = () => {
     
     setDetectedPitch(detected);
     setDetectedBass(bassFreq);
+    setIsBassEstimated(audioService.isBassEstimated);
     setIsCachedResult(false);
     
     await cacheService.saveAnalysis(file, {
@@ -269,7 +326,8 @@ export const useAudioProcessor = () => {
         bassPitch: bassFreq,
         isHiRes: hasHiResContent,
         sensitivity: sensitivity,
-        bassSensitivity: bassSensitivity
+        bassSensitivity: bassSensitivity,
+        isBassEstimated: audioService.isBassEstimated
     });
     
     setIsReanalyzing(false);
@@ -466,6 +524,7 @@ export const useAudioProcessor = () => {
       hasHiResContent,
       detectedPitch,
       detectedBass,
+      isBassEstimated, // Exposed state
       isCachedResult,
       isBufferCached,
       currentTHD,
@@ -479,6 +538,7 @@ export const useAudioProcessor = () => {
     setBassSensitivity,
     isReanalyzing,
     loadFile,
+    loadFromUrl, // Export the new function
     reanalyze,
     togglePlay,
     setTuningPreset: changeTuningPreset,

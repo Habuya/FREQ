@@ -1,7 +1,5 @@
-
-
 import React, { useState } from 'react';
-import { X, RotateCcw, Activity, Mic2, Cpu, Sliders, MoveHorizontal, Pyramid, Waves, Eye, Clock, Zap, Info, Magnet, Speaker, Save, Trash2, ChevronDown, Bookmark, Fingerprint, Globe, Gauge } from 'lucide-react';
+import { X, RotateCcw, Activity, Mic2, Cpu, Sliders, MoveHorizontal, Pyramid, Waves, Eye, Clock, Zap, Info, Magnet, Speaker, Save, Trash2, ChevronDown, Bookmark, Fingerprint, Globe, Gauge, Wind, RefreshCw, AlertTriangle } from 'lucide-react';
 import { AudioSettings, SaturationType, MasteringPreset } from '../types';
 
 interface SettingsModalProps {
@@ -10,6 +8,8 @@ interface SettingsModalProps {
   settings: AudioSettings;
   onUpdate: (newSettings: AudioSettings) => void;
   detectedBass?: number;
+  isBassEstimated?: boolean; // New prop
+  onReanalyze?: () => void; // New prop for Retry
   presets: {
       list: MasteringPreset[];
       currentId: string;
@@ -19,7 +19,7 @@ interface SettingsModalProps {
   };
 }
 
-const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings, onUpdate, detectedBass = 0, presets }) => {
+const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings, onUpdate, detectedBass = 0, isBassEstimated = false, onReanalyze, presets }) => {
   if (!isOpen) return null;
 
   const [isPresetMenuOpen, setIsPresetMenuOpen] = useState(false);
@@ -73,7 +73,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
       deepZenBass: 0.0,
       spaceResonance: 0.0,
       roomScale: 0.5,
-      autoEqEnabled: false
+      breathingEnabled: false,
+      breathingIntensity: 0.0,
+      autoEqEnabled: false,
+      autoEqIntensity: 0.5
     });
   };
 
@@ -277,6 +280,41 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
 
            <div className="h-px bg-slate-800" />
 
+           {/* Section: Organic Automation */}
+           <div className="space-y-4">
+              <h3 className="text-xs font-mono text-blue-400 uppercase tracking-widest flex items-center gap-2">
+                  <Wind size={12} /> Organic Automation
+              </h3>
+              <div className="bg-blue-900/10 rounded-xl p-4 space-y-4 border border-blue-500/20">
+                  <Toggle 
+                    label="Fibonacci Breathing (ϕ-Cycles)" 
+                    checked={settings.breathingEnabled} 
+                    onChange={(v) => onUpdate({...settings, breathingEnabled: v})}
+                    icon={<Activity size={14} className="text-blue-400" />}
+                  />
+                  
+                  {settings.breathingEnabled && (
+                    <div className="space-y-1 pl-6 animate-in fade-in slide-in-from-top-1">
+                        <div className="flex justify-between text-[10px] text-slate-400">
+                        <span>Breath Intensity</span>
+                        <span>{(settings.breathingIntensity * 100).toFixed(0)}%</span>
+                        </div>
+                        <input 
+                        type="range" min="0" max="1" step="0.05"
+                        value={settings.breathingIntensity}
+                        onChange={(e) => onUpdate({...settings, breathingIntensity: Number(e.target.value)})}
+                        className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                        />
+                        <p className="text-[10px] text-slate-500 italic pt-1">
+                            Modulates stereo width and resonance drift at 0.618 Hz to simulate biological respiration.
+                        </p>
+                    </div>
+                  )}
+              </div>
+           </div>
+           
+           <div className="h-px bg-slate-800" />
+
           {/* Section: Harmonic Timbre Shaping (New) */}
           <div className="space-y-4">
              <div className="flex items-center justify-between">
@@ -437,7 +475,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
                        <div className="group relative">
                            <Info size={12} className="text-slate-500 cursor-help" />
                            <div className="absolute right-0 bottom-full mb-2 w-56 p-2 bg-slate-800 text-[10px] text-slate-300 rounded border border-slate-600 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
-                              Harmonic Reverb: Creates a virtual space that resonates mathematically with the target frequency. Prevents dissonance in the decay tail.
+                              Harmonic Reverb: Erzeugt einen virtuellen Raum, der mathematisch mit der gewählten Frequenz mitschwingt. Verhindert disharmonische Überlagerungen im Nachhall.
                            </div>
                        </div>
                     </div>
@@ -463,7 +501,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
                         {/* Decay/Feedback */}
                         <div className="space-y-1">
                             <div className="flex justify-between text-xs">
-                                <span className="text-slate-400">Room Scale</span>
+                                <span className="text-slate-400">Room Scale (Decay)</span>
                                 <span className="text-blue-400 font-mono">{(settings.roomScale * 100).toFixed(0)}%</span>
                             </div>
                             <input 
@@ -534,10 +572,30 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
                     onChange={(v) => onUpdate({...settings, sacredGeometryMode: v})}
                   />
                   {/* Dynamic Frequency Preview */}
-                  {settings.sacredGeometryMode && detectedBass > 20 && (
-                     <div className="mt-2 p-2 bg-amber-900/20 rounded border border-amber-500/20 animate-in fade-in slide-in-from-top-1">
-                        <div className="flex justify-between items-center text-[10px] font-mono text-amber-300/80">
-                           <span>Targeting:</span>
+                  {settings.sacredGeometryMode && (
+                     <div className={`mt-2 p-2 rounded border animate-in fade-in slide-in-from-top-1 ${isBassEstimated ? 'bg-amber-900/10 border-amber-500/10' : 'bg-amber-900/20 border-amber-500/20'}`}>
+                        <div className="flex justify-between items-center text-[10px] font-mono text-amber-300/80 mb-1">
+                           <span className="flex items-center gap-1.5">
+                               {isBassEstimated ? (
+                                   <span className="text-amber-500 font-bold flex items-center gap-1">
+                                       <AlertTriangle size={10} /> AUTO-MODE (Estimated Bass)
+                                   </span>
+                               ) : (
+                                   <span className="text-emerald-400 flex items-center gap-1">
+                                       <Activity size={10} /> Live Bass Alignment
+                                   </span>
+                               )}
+                           </span>
+                           {isBassEstimated && onReanalyze && (
+                               <button 
+                                onClick={onReanalyze}
+                                className="text-[9px] bg-slate-700 hover:bg-slate-600 text-white px-1.5 py-0.5 rounded flex items-center gap-1 transition-colors"
+                               >
+                                   <RefreshCw size={8} /> Retry Scan
+                               </button>
+                           )}
+                        </div>
+                        <div className="flex justify-between items-center text-[10px] font-mono text-amber-300/60 pt-1 border-t border-amber-500/10">
                            <span>Sub {(detectedBass).toFixed(0)}Hz</span>
                            <span>|</span>
                            <span>Mid {(detectedBass * Math.pow(PHI, 3)).toFixed(0)}Hz</span>
@@ -545,11 +603,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
                            <span>Air {((detectedBass * Math.pow(PHI, 7)) / 1000).toFixed(1)}kHz</span>
                         </div>
                      </div>
-                  )}
-                  {settings.sacredGeometryMode && detectedBass <= 20 && (
-                     <p className="mt-2 text-[10px] text-amber-500/50 italic">
-                        Waiting for Bass detection...
-                     </p>
                   )}
                </div>
                
@@ -562,9 +615,21 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
                     onChange={(v) => onUpdate({...settings, autoEqEnabled: v})}
                   />
                   {settings.autoEqEnabled && (
-                      <p className="mt-2 text-[10px] text-teal-500/80 italic pl-6">
-                          Real-time analysis active. Balancing energy towards -3dB/Oct Pink Noise curve.
-                      </p>
+                      <div className="mt-3 pl-6 space-y-2 animate-in fade-in slide-in-from-top-1">
+                          <div className="flex justify-between text-xs text-teal-400/80">
+                            <span>Correction Strength</span>
+                            <span>{(settings.autoEqIntensity * 100).toFixed(0)}%</span>
+                          </div>
+                          <input 
+                            type="range" min="0" max="1" step="0.05"
+                            value={settings.autoEqIntensity}
+                            onChange={(e) => onUpdate({...settings, autoEqIntensity: Number(e.target.value)})}
+                            className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                          />
+                          <p className="text-[10px] text-teal-500/60 italic">
+                            Matches energy profile to Pink Noise (-3dB/oct). Adjust lower for transparency, higher for polish.
+                          </p>
+                      </div>
                   )}
                </div>
 

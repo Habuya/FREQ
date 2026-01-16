@@ -1,0 +1,5 @@
+{
+  "name": "Copy of ZenTuner Web",
+  "description": "A high-end audio analysis and 432Hz conversion tool using Web Audio API and Canvas visualization.",
+  "requestFramePermissions": []
+}

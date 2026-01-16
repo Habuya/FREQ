@@ -1,4 +1,6 @@
+
 import { TuningPreset, SaturationType, AudioSettings } from '../types';
+import { logger } from './logger';
 
 // Inlined Worker Code to avoid file resolution issues in different environments
 const WORKER_CODE = `
@@ -93,6 +95,9 @@ async function detectInherentTuning(inputData, sampleRate, sensitivity) {
 
 // --- Bass Detection ---
 async function detectBassRoot(pcmData, sampleRate, sensitivity) {
+    // Graceful fallback if OfflineAudioContext is not available in Worker
+    if (!OfflineContextClass) return 0;
+
     const windowSize = 8192;
     let bestOffset = 0;
     let maxEnergy = 0;
@@ -230,6 +235,10 @@ class AudioService {
   private gainNode: GainNode | null = null;
   private analyser: AnalyserNode | null = null;
   
+  // --- Parallel DJ Crossfader System ---
+  private crossfadeDry: GainNode | null = null; // Path A (Original/440Hz)
+  private crossfadeWet: GainNode | null = null; // Path B (Pi 23 Tuning)
+
   // --- Sacred Geometry Constants & State ---
   private readonly PHI = 1.61803398875;
   private sacredGeometryMode: boolean = false;
@@ -336,7 +345,8 @@ class AudioService {
   constructor() {
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
     this.context = new AudioContextClass({ latencyHint: 'playback' }); 
-    
+    logger.info('Audio Context Constructed', 'DSP_INIT');
+
     // Initialize Web Worker with Blob
     if (window.Worker) {
         try {
@@ -347,9 +357,12 @@ class AudioService {
             this.worker.onmessage = this.handleWorkerMessage.bind(this);
             this.worker.onerror = (e) => {
                 console.warn("Worker error:", e);
+                logger.error('DSP Worker encountered an error', 'WORKER_ERR');
             };
+            logger.info('DSP Analysis Worker Thread Spawned', 'WORKER_OK');
         } catch (e) {
             console.error("Failed to initialize audio worker:", e);
+            logger.error('Failed to spawn DSP Worker', 'WORKER_FAIL');
         }
     }
     
@@ -477,9 +490,17 @@ class AudioService {
     
     this.binauralGain = this.context.createGain();
     this.binauralGain.gain.value = 0; 
+    
+    // --- CROSSFADE INIT (DJ-Feel) ---
+    this.crossfadeDry = this.context.createGain();
+    this.crossfadeWet = this.context.createGain();
+    
+    // Set default to Wet (Processed)
+    this.crossfadeDry.gain.value = 0;
+    this.crossfadeWet.gain.value = 1;
 
     // --- ROUTING / WIRING ---
-    // Chain: Source -> PhaseDelay -> PreGain -> Body -> Resonance
+    // Chain: PhaseDelay -> PreGain -> Body -> Resonance
     this.phaseDelayNode.connect(this.preGainNode);
     this.preGainNode.connect(this.bodyFilter);
     this.bodyFilter.connect(this.resonanceFilter);
@@ -557,12 +578,33 @@ class AudioService {
     this.msMerger.connect(this.driveNode);
     this.driveNode.connect(this.saturator);
     this.saturator.connect(this.compressor);
-    this.compressor.connect(this.gainNode);
     
-    this.binauralGain.connect(this.gainNode);
+    // --- CROSSFADE FINAL STAGE ---
+    // Wet Path (Processed)
+    this.compressor.connect(this.crossfadeWet);
+    this.binauralGain.connect(this.crossfadeWet); // Binaural is part of FX
+    
+    // Dry Path is connected dynamically in play() from source -> crossfadeDry
+    
+    // Sum to Master Gain
+    this.crossfadeWet.connect(this.gainNode);
+    this.crossfadeDry.connect(this.gainNode);
     
     this.gainNode.connect(this.analyser);
     this.analyser.connect(this.context.destination);
+    
+    logger.info('Audio Graph Build Complete', 'DSP_BUILD');
+  }
+  
+  public getContext(): AudioContext | null {
+      return this.context;
+  }
+
+  public async resumeContext() {
+      if (this.context && this.context.state === 'suspended') {
+          await this.context.resume();
+          logger.info('Audio Context Resumed', 'CTX_RESUME');
+      }
   }
 
   // ... (Worker Handling and other methods remain the same) ...
@@ -574,6 +616,7 @@ class AudioService {
       if (success) {
         callback.resolve(result);
       } else {
+        logger.warn(`DSP Worker Job ${id} Failed: ${error}`, 'WORKER_JOB_FAIL');
         callback.reject(new Error(error));
       }
       this.workerCallbacks.delete(id);
@@ -589,6 +632,21 @@ class AudioService {
       this.worker!.postMessage({ id, type, payload }, transferables);
     });
   }
+  
+  // --- DJ CROSSFADER LOGIC ---
+  public setCrossfade(value: number) {
+      if (!this.crossfadeDry || !this.crossfadeWet || !this.context) return;
+      
+      const clamped = Math.max(0, Math.min(1, value));
+      const now = this.context.currentTime;
+      
+      // Constant Power Curve
+      const gainA = Math.cos(clamped * 0.5 * Math.PI); // Dry
+      const gainB = Math.sin(clamped * 0.5 * Math.PI); // Wet (Pi 23)
+      
+      this.crossfadeDry.gain.setTargetAtTime(gainA, now, 0.05);
+      this.crossfadeWet.gain.setTargetAtTime(gainB, now, 0.05);
+  }
 
   // Getter for the estimation flag
   public get isBassEstimated(): boolean {
@@ -599,8 +657,9 @@ class AudioService {
     const targetBuffer = buffer || this.audioBuffer;
     if (!targetBuffer || !this.worker) return 440;
 
+    logger.info(`Starting tuning detection (Sensitivity: ${sensitivity})`, 'TUNE_SCAN_START');
+
     try {
-        // Analyze a representative 5-second chunk from 20% into the track to avoid silent intros
         const startOffsetTime = Math.min(targetBuffer.duration * 0.2, 10);
         const startSample = Math.floor(startOffsetTime * targetBuffer.sampleRate);
         const lengthSamples = Math.min(
@@ -610,7 +669,6 @@ class AudioService {
         
         if (lengthSamples <= 0) return 440;
         
-        // slice() creates a copy which can be transferred to worker
         const slice = targetBuffer.getChannelData(0).slice(startSample, startSample + lengthSamples);
 
         const result = await this.runWorkerTask<number>(
@@ -622,10 +680,12 @@ class AudioService {
             },
             [slice.buffer] 
         );
+        logger.success(`Tuning detected: ${result.toFixed(2)}Hz`, 'TUNE_SCAN_OK');
         return result;
 
     } catch(e) {
         console.warn("Tuning detection failed", e);
+        logger.error('Tuning detection failed', 'TUNE_SCAN_ERR');
         return 440;
     }
   }
@@ -633,6 +693,8 @@ class AudioService {
   public async detectBassRoot(sensitivity: number = 50, buffer: AudioBuffer | null = null, updateState: boolean = true): Promise<number> {
     const targetBuffer = buffer || this.audioBuffer;
     if (!targetBuffer || !this.worker) return 0;
+    
+    logger.info(`Starting bass root detection`, 'BASS_SCAN_START');
 
     try {
         const scanDuration = 6;
@@ -646,9 +708,6 @@ class AudioService {
         if (lengthSamples <= 0) return 0;
         const slice = targetBuffer.getChannelData(0).slice(startSample, startSample + lengthSamples);
         
-        // --- Normalization Strategy (Strict 0.8 Target) ---
-        // Boost quiet signals to help the algorithm detect periodicity
-        // Modified: Now enforces normalization regardless of initial level for consistency
         let maxAmp = 0;
         for(let i=0; i<slice.length; i++) {
             const abs = Math.abs(slice[i]);
@@ -659,7 +718,6 @@ class AudioService {
              const scaler = 0.8 / maxAmp;
              for(let i=0; i<slice.length; i++) slice[i] *= scaler;
         }
-        // ------------------------------
 
         let detectedFreq = await this.runWorkerTask<number>(
             'DETECT_BASS', 
@@ -673,22 +731,19 @@ class AudioService {
         
         // --- Fallback & Estimation Logic ---
         if (detectedFreq < 20) {
-            detectedFreq = 60; // Standard stable kick/bass fundamental
+            detectedFreq = 60; 
             this._isBassEstimated = true;
+            logger.warn('Bass detection low confidence, using 60Hz fallback', 'BASS_FALLBACK');
         } else {
             this._isBassEstimated = false;
+            logger.success(`Bass root found: ${detectedFreq.toFixed(2)}Hz`, 'BASS_SCAN_OK');
         }
-        // -----------------------------------
         
         if (updateState) {
             this.lastDetectedBass = detectedFreq;
             this.applyGoldenRatioEQ(detectedFreq);
             this.updateHarmonicFilters(detectedFreq); 
             
-            // Trigger Phase Detection
-            // Only perform precise phase lock if we have a real detection, 
-            // otherwise phase locking to an estimated frequency is meaningless.
-            // However, we reset the phase offset to 0 if estimated.
             if (!this._isBassEstimated && detectedFreq > 20) {
                 const phaseSlice = targetBuffer.getChannelData(0).slice(0, 4096);
                 this.detectedPhaseOffset = await this.runWorkerTask<number>('DETECT_PHASE', {
@@ -696,6 +751,7 @@ class AudioService {
                     sampleRate: targetBuffer.sampleRate,
                     frequency: detectedFreq
                 }, [phaseSlice.buffer]);
+                logger.info(`Phase lock offset calculated: ${this.detectedPhaseOffset.toFixed(4)}s`, 'PHASE_CALC');
             } else {
                 this.detectedPhaseOffset = 0;
             }
@@ -723,7 +779,6 @@ class AudioService {
             this.startBreathingLoop();
         } else if (!enabled && this.breathingInterval) {
             this.stopBreathingLoop();
-            // Reset modulated values to base
             if (this.sideGainNode && this.context) {
                 this.sideGainNode.gain.setTargetAtTime(this.currentStereoWidth, this.context.currentTime, 0.5);
             }
@@ -736,7 +791,6 @@ class AudioService {
   
   private startBreathingLoop() {
       if (this.breathingInterval) clearInterval(this.breathingInterval);
-      // Update at 20fps for smooth LFO control signals
       this.breathingInterval = window.setInterval(() => this.applyPhiAutomation(), 50);
   }
   
@@ -751,25 +805,19 @@ class AudioService {
     if (!this.breathingEnabled || !this.context) return;
     
     const currentTime = this.context.currentTime;
-    // Der Phi-LFO Rhythmus
     const cycle = (currentTime / this.PHI) % 1;
-  
-    // Organische Atem-Kurve: sin(x) mit leichter Sättigung
     const lfo = Math.pow(Math.sin(cycle * Math.PI * 2) * 0.5 + 0.5, 1.5);
-  
     const modulation = lfo * this.breathingIntensity;
 
-    // 1. Stereo-Breite modulieren (Atem des Raums)
     if (this.sideGainNode) {
         const currentWidth = this.currentStereoWidth; 
-        const modulatedWidth = currentWidth + (modulation * 0.5); // Max +50% Weite
+        const modulatedWidth = currentWidth + (modulation * 0.5); 
         this.sideGainNode.gain.setTargetAtTime(modulatedWidth, currentTime, 0.1);
     }
 
-    // 2. Resonanz-Filter subtil wandern lassen
     if (this.resonanceFilter && !this.eqBypass.resonance) {
         const baseFreq = this.baseResonanceFreq;
-        const drift = baseFreq * (0.02 * modulation); // 2% Frequenz-Drift für Lebendigkeit
+        const drift = baseFreq * (0.02 * modulation);
         this.resonanceFilter.frequency.setTargetAtTime(baseFreq + drift, currentTime, 0.2);
     }
   }
@@ -800,7 +848,6 @@ class AudioService {
   public setRoomScale(amount: number) {
       if (!this.context || !this.reverbFeedback) return;
       this.roomScale = amount;
-      // Max feedback 0.9 to avoid infinite loop screech
       const fb = Math.min(amount * 0.9, 0.9);
       this.reverbFeedback.gain.setTargetAtTime(fb, this.context.currentTime, 0.1);
   }
@@ -810,7 +857,6 @@ class AudioService {
       
       if (enabled) {
           if (!this.autoEqInterval) {
-              // Start Analysis Loop (200ms)
               this.autoEqInterval = window.setInterval(() => this.updateAutoEq(), 200);
           }
       } else {
@@ -818,7 +864,6 @@ class AudioService {
               clearInterval(this.autoEqInterval);
               this.autoEqInterval = null;
           }
-          // Reset gains to 0
           const now = this.context?.currentTime || 0;
           this.autoEqLow?.gain.setTargetAtTime(0, now, 0.5);
           this.autoEqMid?.gain.setTargetAtTime(0, now, 0.5);
@@ -843,18 +888,11 @@ class AudioService {
       const sampleRate = this.context.sampleRate;
       const binWidth = sampleRate / fftSize;
       
-      // Define Bands (Pink Noise should have roughly equal energy per octave band)
-      // Pink Noise: Energy density drops by 3dB/octave on linear spectrum
-      // Band 1: Low (60 - 250 Hz)
       const b1 = this.getBandEnergy(dataArray, 60, 250, binWidth);
-      // Band 2: Low-Mid (250 - 1000 Hz)
       const b2 = this.getBandEnergy(dataArray, 250, 1000, binWidth);
-      // Band 3: High-Mid (1000 - 4000 Hz)
       const b3 = this.getBandEnergy(dataArray, 1000, 4000, binWidth);
-      // Band 4: High (4000 - 16000 Hz)
       const b4 = this.getBandEnergy(dataArray, 4000, 16000, binWidth);
       
-      // Calculate Variance/Score (Spectral Balance)
       const maxVal = Math.max(b1, b2, b3, b4, 1);
       const n1 = b1 / maxVal;
       const n2 = b2 / maxVal;
@@ -877,36 +915,28 @@ class AudioService {
       if (!this.autoEqEnabled) return;
       
       const now = this.context.currentTime;
-      const smooth = 0.8; // Very slow smoothing to prevent pumping
+      const smooth = 0.8; 
       
-      // Scale corrections by intensity
       const intensity = this.autoEqIntensity;
 
-      // Low Correction (250Hz Peak)
-      // If Lows are weak relative to Mids
       let gLow = 0;
       if (n1 < n2 * 0.85) gLow = 2.5; 
       else if (n1 > n2 * 1.25) gLow = -2.5;
       this.autoEqLow?.gain.setTargetAtTime(gLow * intensity, now, smooth);
       
-      // Mid Correction (1kHz Peak)
-      // Pivot point - keep subtle
       let gMid = 0;
       if (n2 < n3 * 0.9) gMid = 1.5;
       else if (n2 > n3 * 1.3) gMid = -1.5;
       this.autoEqMid?.gain.setTargetAtTime(gMid * intensity, now, smooth);
       
-      // High Correction (4kHz Peak)
       let gHigh = 0;
-      if (n3 < n4) gHigh = -2; // Harsh
-      else if (n3 > n4 * 2) gHigh = 2; // Dull
+      if (n3 < n4) gHigh = -2; 
+      else if (n3 > n4 * 2) gHigh = 2; 
       this.autoEqHigh?.gain.setTargetAtTime(gHigh * intensity, now, smooth);
       
-      // Tilt EQ (2.5kHz High Shelf) - "The Air"
-      // If the top end is too weak compared to bottom
       let gTilt = 0;
-      if (n4 < 0.4) gTilt = 2.0; // Boost Air
-      else if (n4 > 0.85) gTilt = -2.0; // Cut Harshness
+      if (n4 < 0.4) gTilt = 2.0; 
+      else if (n4 > 0.85) gTilt = -2.0; 
       this.autoTilt?.gain.setTargetAtTime(gTilt * intensity, now, smooth);
   }
   
@@ -933,8 +963,10 @@ class AudioService {
           const now = this.context.currentTime;
           if (active) {
               this.phaseDelayNode.delayTime.setTargetAtTime(this.detectedPhaseOffset, now, 0.2);
+              logger.info('Phase lock engaged', 'PHASE_LOCK_ON');
           } else {
               this.phaseDelayNode.delayTime.setTargetAtTime(0, now, 0.2);
+              logger.info('Phase lock disengaged', 'PHASE_LOCK_OFF');
           }
       }
   }
@@ -944,18 +976,15 @@ class AudioService {
       this.harmonicClarity = clarity;
       this.timbreMorph = timbreMorph;
       
-      // Update logic based on current bass or fallback
       const root = this.lastDetectedBass > 20 ? this.lastDetectedBass : 60;
       this.updateHarmonicFilters(root);
       
-      // Also update Reverb Filters as Timbre Morph affects them
       if (this.isPlaying) {
           this.applyTuning(this.currentTargetFrequency, false);
       }
   }
 
   private calculateFormantCorrection(targetFreq: number, sourcePitch: number): number {
-      // Calculate pitch ratio
       const ratio = targetFreq / (sourcePitch || 440);
       const preservationFactor = 1 / ratio;
       return this.timbreMorph;
@@ -966,13 +995,11 @@ class AudioService {
       const now = this.context.currentTime;
       const nyquist = this.context.sampleRate / 2;
       
-      // Timbre Morph shifts the harmonic structure relative to the fundamental.
       const morph = this.timbreMorph;
 
       this.harmonicFilters.forEach((filter, index) => {
-          const harmonicOrder = index + 1; // 1st to 8th
+          const harmonicOrder = index + 1; 
           
-          // Apply Morph to the target frequency
           const targetFreq = (rootFreq * harmonicOrder) * morph;
           
           if (targetFreq > nyquist) {
@@ -1001,29 +1028,16 @@ class AudioService {
     if (!this.context || !this.reverbDelay) return;
     const now = this.context.currentTime;
 
-    // 1. Calculate Base Period & Delay Time (Fibonacci-Locked)
-    // Period T = 1 / F
-    // We use a Fibonacci multiple (e.g. 13 or 21) of the period to create a
-    // resonant chamber that supports the fundamental wave mathematically.
     const period = 1 / targetFreq;
-    
-    // 21 is a Fibonacci number. 
-    // At 432Hz: period = 2.31ms. 2.31 * 21 = ~48.5ms (Slapback/Room size)
-    // At 528Hz: period = 1.89ms. 1.89 * 21 = ~39.7ms
     const delayTime = period * 21; 
 
     this.reverbDelay.delayTime.setTargetAtTime(delayTime, now, 0.2);
 
-    // 2. Tune Feedback Filters to Harmonics (f2, f3, f5)
-    // This ensures the reverb tail only resonates at harmonic intervals, 
-    // preventing dissonant buildup.
     const harmonics = [2, 3, 5];
     
     this.reverbFilters.forEach((filter, i) => {
         if (harmonics[i]) {
-             // Apply Timbre Morph to reverb texture as well
              const freq = (targetFreq * harmonics[i]) * this.timbreMorph;
-             // Ensure we don't exceed Nyquist
              const safeFreq = Math.min(freq, this.context!.sampleRate / 2 - 1000);
              filter.frequency.setTargetAtTime(safeFreq, now, 0.2);
         }
@@ -1037,7 +1051,6 @@ class AudioService {
       
       if (this.isPlaying) {
           if (active) {
-              // Smooth update if already running
               if (wasActive && this.binauralOscRight && this.context) {
                   const now = this.context.currentTime;
                   const rootFreq = this.lastDetectedBass > 30 ? this.lastDetectedBass : 60; 
@@ -1114,12 +1127,8 @@ class AudioService {
         targetRes = Math.min(targetRes, maxFreq);
     }
     
-    // Apply Formant/Timbre Morph to the Resonance Filter
-    // This acts as the "Spectral Envelope Follower" mentioned in requirements
-    // By shifting the resonance peak, we change the vowel character of the sound
     targetRes = targetRes * this.timbreMorph;
     
-    // Store Base Frequency for breathing mod
     this.baseResonanceFreq = targetRes;
 
     this.bodyFilter.frequency.setTargetAtTime(targetBody, now, 0.1);
@@ -1306,16 +1315,12 @@ class AudioService {
       const curve = new Float32Array(samples);
       for (let i = 0; i < samples; ++i) {
         const x = (i * 2) / samples - 1;
-        // Asymmetric transfer function to create strong 2nd harmonic
-        // y = 0.5 * (x + abs(x)) + tanh(x) roughly
-        // We use a simpler approach for controllable distortion
-        
         let y = x;
         if (Math.abs(x) > 0.1) {
-            y = x + (0.2 * x * x); // Even harmonic bias
+            y = x + (0.2 * x * x); 
         }
         
-        curve[i] = Math.tanh(y * 2.0) * 0.8; // Soft clip
+        curve[i] = Math.tanh(y * 2.0) * 0.8; 
       }
       return curve;
   }
@@ -1331,17 +1336,27 @@ class AudioService {
   public async loadFile(file: File): Promise<AudioBuffer> {
     if (!this.context) throw new Error("AudioContext not initialized");
     
+    await this.resumeContext(); // Ensure context is awake on user interaction
+
     this.stop();
     this.accumulatedBufferTime = 0;
     this.sourceReferencePitch = 440;
     this.lastDetectedBass = 0;
     this.detectedPhaseOffset = 0;
-    this._isBassEstimated = false; // Reset state on load
+    this._isBassEstimated = false; 
     
-    const arrayBuffer = await file.arrayBuffer();
-    const decodedBuffer = await this.context.decodeAudioData(arrayBuffer);
-    this.audioBuffer = decodedBuffer;
-    return decodedBuffer;
+    logger.info(`Loading file: ${file.name} (${(file.size/1024/1024).toFixed(2)}MB)`, 'FILE_LOAD');
+    
+    try {
+        const arrayBuffer = await file.arrayBuffer();
+        const decodedBuffer = await this.context.decodeAudioData(arrayBuffer);
+        this.audioBuffer = decodedBuffer;
+        logger.success('File decoded successfully', 'FILE_DECODE_OK');
+        return decodedBuffer;
+    } catch (e) {
+        logger.error(`File load failed: ${e.message}`, 'FILE_LOAD_ERR');
+        throw e;
+    }
   }
 
   public async decodeFileOffline(file: File): Promise<AudioBuffer> {
@@ -1363,6 +1378,7 @@ class AudioService {
     this.detectedPhaseOffset = 0;
     this._isBassEstimated = false;
     this.audioBuffer = buffer;
+    logger.info('Audio buffer set from cache', 'BUFFER_SET');
   }
 
   public createBufferFromData(data: { sampleRate: number, channels: Float32Array[] }): AudioBuffer {
@@ -1428,13 +1444,12 @@ class AudioService {
     }
   }
 
-  // --- MISSING METHODS ADDED FOR TYPE COMPATIBILITY ---
-
   public setTargetFrequency(freq: number) {
     this.currentTargetFrequency = freq;
     if (this.isPlaying) {
       this.applyTuning(freq, false);
     }
+    logger.info(`Target frequency set: ${freq}Hz`, 'TARGET_SET');
   }
 
   public applyTuning(targetFreq: number, restart: boolean = false) {
@@ -1446,8 +1461,6 @@ class AudioService {
     if (this.sacredGeometryMode) {
       this.applyGoldenRatioEQ(this.lastDetectedBass);
     }
-    
-    // Update the Harmonic Reverb to match new frequency math
     this.updateHarmonicReverb(targetFreq);
   }
 
@@ -1455,41 +1468,44 @@ class AudioService {
     if (!this.context || !this.audioBuffer) return;
     if (this.context.state === 'suspended') this.context.resume();
     
-    this.stop(false); // Stop but retain position for resume
+    this.stop(true); 
     
-    this.source = this.context.createBufferSource();
+    const source = this.context.createBufferSource();
+    this.source = source;
     this.source.buffer = this.audioBuffer;
     
     const ratio = this.currentTargetFrequency / (this.sourceReferencePitch || 440);
     this.source.playbackRate.value = ratio;
     
     if (this.phaseDelayNode) {
-      this.source.connect(this.phaseDelayNode);
+      this.source.connect(this.phaseDelayNode); 
+    }
+    if (this.crossfadeDry) {
+        this.source.connect(this.crossfadeDry); 
     }
     
+    // CRITICAL FIX: Identity check to prevent race conditions with rapid play/stop
     this.source.onended = () => {
-      if (this.isPlaying) {
+      if (this.source === source && this.isPlaying) {
         this.isPlaying = false;
         this.accumulatedBufferTime = 0;
         if (onEnded) onEnded();
       }
     };
     
-    // Resume from accumulated time
     const startTime = 0; 
-    const offset = this.accumulatedBufferTime; 
+    const offset = Math.min(this.accumulatedBufferTime, this.audioBuffer.duration);
     
     this.source.start(startTime, offset);
     
     this.isPlaying = true;
     this.lastTimestamp = this.context.currentTime;
     
-    // Restart automation
     if (this.breathingEnabled) this.setBreathingEnabled(true, this.breathingIntensity);
     if (this.autoEqEnabled) this.setAutoEqEnabled(true);
     
-    // Ensure reverb is tuned correctly on start
     this.updateHarmonicReverb(this.currentTargetFrequency);
+    logger.info('Playback started', 'PLAY');
   }
 
   public pause() {
@@ -1501,6 +1517,7 @@ class AudioService {
     
     this.accumulatedBufferTime += (elapsed * ratio);
     this.stop(true);
+    logger.info('Playback paused', 'PAUSE');
   }
 
   public stop(retainPosition: boolean = false) {
@@ -1531,18 +1548,7 @@ class AudioService {
   }
 
   public toggleBypass(bypass: boolean) {
-    if (!this.source || !this.gainNode || !this.phaseDelayNode) return;
-    
-    // Re-route
-    this.source.disconnect();
-    
-    if (bypass) {
-        // Bypass Chain: Source -> GainNode -> Analyser -> Dest
-        this.source.connect(this.gainNode);
-    } else {
-        // FX Chain: Source -> PhaseDelay -> ...
-        this.source.connect(this.phaseDelayNode);
-    }
+      this.setCrossfade(bypass ? 0 : 1);
   }
 
   public async detectPhase(buffer: AudioBuffer, freq: number): Promise<number> {
@@ -1556,7 +1562,6 @@ class AudioService {
   }
 
   private async analyzeBufferSpectrum(buffer: AudioBuffer): Promise<{ low: number, mid: number, high: number, tilt: number }> {
-      // Perform a quick offline scan of the middle of the track to determine static EQ settings for export
       const OfflineContextClass = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
       const scanDuration = 4.0;
       const start = Math.min(buffer.duration * 0.4, buffer.duration - scanDuration);
@@ -1564,7 +1569,6 @@ class AudioService {
       const ctx = new OfflineContextClass(1, scanDuration * buffer.sampleRate, buffer.sampleRate);
       const source = ctx.createBufferSource();
       
-      // Extract segment
       const channelData = buffer.getChannelData(0).subarray(
           Math.floor(start * buffer.sampleRate), 
           Math.floor((start + scanDuration) * buffer.sampleRate)
@@ -1588,7 +1592,6 @@ class AudioService {
       analyser.getByteFrequencyData(data);
       const binWidth = buffer.sampleRate / analyser.fftSize;
       
-      // Reuse the band logic from updateAutoEq
       const b1 = this.getBandEnergy(data, 60, 250, binWidth);
       const b2 = this.getBandEnergy(data, 250, 1000, binWidth);
       const b3 = this.getBandEnergy(data, 1000, 4000, binWidth);
@@ -1600,7 +1603,6 @@ class AudioService {
       const n3 = b3 / maxVal;
       const n4 = b4 / maxVal;
       
-      // Calculate Static Gains (Logic duplicated from updateAutoEq for consistency)
       const intensity = this.autoEqIntensity;
       
       let gLow = 0;
@@ -1634,34 +1636,31 @@ class AudioService {
        const OfflineContextClass = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
        if (!OfflineContextClass) throw new Error("Offline Audio not supported");
        
+       logger.info(`Starting offline processing for ${targetFreq}Hz target`, 'RENDER_START');
+       
        const ratio = targetFreq / (sourcePitch || 440);
        const newLength = Math.ceil(buffer.length / ratio);
-       const ctx = new OfflineContextClass(2, newLength, buffer.sampleRate); // Force stereo output
+       const ctx = new OfflineContextClass(2, newLength, buffer.sampleRate); 
        
-       // --- Adaptive Analysis Pre-Pass ---
        let autoEqGains = { low: 0, mid: 0, high: 0, tilt: 0 };
        if (settings.autoEqEnabled) {
            autoEqGains = await this.analyzeBufferSpectrum(buffer);
        }
 
-       // --- 1. Source ---
        const source = ctx.createBufferSource();
        source.buffer = buffer;
        source.playbackRate.value = ratio;
        
-       // --- 2. Phase Alignment ---
        const phaseDelay = ctx.createDelay(1.0);
        phaseDelay.delayTime.value = settings.phaseLockEnabled ? phaseOffset : 0;
        
-       // --- 3. Pre-Gain & EQ Chain ---
        const preGain = ctx.createGain();
        preGain.gain.value = 0.707;
        
-       // Standard Filters
        const bodyFilter = ctx.createBiquadFilter();
        bodyFilter.type = 'lowshelf';
        bodyFilter.frequency.value = settings.sacredGeometryMode && bassFreq > 20 ? bassFreq : 60;
-       bodyFilter.gain.value = settings.bypassBody ? 0 : 0; // Default 0 unless we add a setting to boost body specifically
+       bodyFilter.gain.value = settings.bypassBody ? 0 : 0; 
        
        const resFilter = ctx.createBiquadFilter();
        resFilter.type = 'peaking';
@@ -1669,12 +1668,11 @@ class AudioService {
        if (settings.sacredGeometryMode && bassFreq > 20) {
            resFreq = bassFreq * Math.pow(this.PHI, 3);
        }
-       resFreq = resFreq * settings.timbreMorph; // Apply Timbre Morph
+       resFreq = resFreq * settings.timbreMorph; 
        resFilter.frequency.value = resFreq;
        resFilter.Q.value = 0.8;
        resFilter.gain.value = settings.bypassResonance ? 0 : 0;
 
-       // Adaptive Auto-EQ Filters (Static Application)
        const eqLow = ctx.createBiquadFilter(); eqLow.type = 'peaking'; eqLow.frequency.value = 250; eqLow.Q.value = 1.0;
        eqLow.gain.value = autoEqGains.low;
 
@@ -1687,14 +1685,11 @@ class AudioService {
        const eqTilt = ctx.createBiquadFilter(); eqTilt.type = 'highshelf'; eqTilt.frequency.value = 2500;
        eqTilt.gain.value = autoEqGains.tilt;
 
-       // --- 4. Harmonic Series Filters (8 Bands) ---
        const harmonicFilters: BiquadFilterNode[] = [];
        const nyquist = ctx.sampleRate / 2;
        
-       // Chain helper
        let currentChainNode: AudioNode = eqTilt;
        
-       // Connect Source -> Delay -> Pre -> Body -> Res -> AutoEQs
        source.connect(phaseDelay);
        phaseDelay.connect(preGain);
        preGain.connect(bodyFilter);
@@ -1734,64 +1729,47 @@ class AudioService {
            currentChainNode = f;
        }
 
-       // --- 5. Parallel Processing (Sub & Reverb) ---
-       // We need to tap the signal BEFORE the MS Matrix
        const dryPath = currentChainNode;
        
-       // Deep Zen Bass Chain
        const subLowpass = ctx.createBiquadFilter(); subLowpass.type = 'lowpass'; subLowpass.frequency.value = 90;
        const subShaper = ctx.createWaveShaper(); subShaper.curve = this.makeSubHarmonicCurve(4096); subShaper.oversample = '4x';
        const subFilter = ctx.createBiquadFilter(); subFilter.type = 'bandpass'; subFilter.frequency.value = 180; subFilter.Q.value = 1.5;
        const subGain = ctx.createGain(); subGain.gain.value = settings.deepZenBass * 2.0;
        
-       // Tap for Sub (Ideally from pre-EQ but post-EQ is fine for consistency)
        eqTilt.connect(subLowpass);
        subLowpass.connect(subShaper);
        subShaper.connect(subFilter);
        subFilter.connect(subGain);
 
-       // Harmonic Reverb Chain
-       // For offline, we can't easily do feedback loops if the duration is fixed to source length unless we extend it.
-       // However, typical reverb feedback fits within the track flow.
-       // But creating a feedback loop in OfflineContext sometimes has issues if delay > render block.
-       // We will implement a simplified feed-forward or short feedback loop.
        const reverbInput = ctx.createGain();
        const reverbDelay = ctx.createDelay(2.0);
        const period = 1 / targetFreq;
-       reverbDelay.delayTime.value = period * 21; // Fibonacci
+       reverbDelay.delayTime.value = period * 21; 
        
        const reverbOutput = ctx.createGain();
        reverbOutput.gain.value = settings.spaceResonance * 0.8;
        
-       // Filters for Reverb Color
        const verbFilter1 = ctx.createBiquadFilter(); verbFilter1.type = 'peaking'; verbFilter1.frequency.value = (targetFreq * 2) * settings.timbreMorph; verbFilter1.Q.value = 4.0; verbFilter1.gain.value = 6;
        const verbFilter2 = ctx.createBiquadFilter(); verbFilter2.type = 'peaking'; verbFilter2.frequency.value = (targetFreq * 3) * settings.timbreMorph; verbFilter2.Q.value = 4.0; verbFilter2.gain.value = 6;
        
-       // Wire Reverb (Feed Forward + 1 Feedback iteration simulation or just simple delay line for stability)
-       // Tap
        eqTilt.connect(reverbInput);
        reverbInput.connect(reverbDelay);
        reverbDelay.connect(verbFilter1);
        verbFilter1.connect(verbFilter2);
        verbFilter2.connect(reverbOutput);
        
-       // Feedback simulation (simplified)
        const fbGain = ctx.createGain();
-       fbGain.gain.value = Math.min(settings.roomScale * 0.5, 0.5); // Lower feedback for offline safety
+       fbGain.gain.value = Math.min(settings.roomScale * 0.5, 0.5); 
        verbFilter2.connect(fbGain);
        fbGain.connect(reverbDelay);
 
-
-       // --- 6. MS Matrix & Mastering ---
        const msSplitter = ctx.createChannelSplitter(2);
        const msMerger = ctx.createChannelMerger(2);
        
-       // Mix Dry + Sub + Reverb into Splitter
        dryPath.connect(msSplitter);
        subGain.connect(msSplitter);
        reverbOutput.connect(msSplitter);
        
-       // MS Logic
        const midSum = ctx.createGain(); midSum.gain.value = 0.5;
        const sideDiff = ctx.createGain(); sideDiff.gain.value = 0.5;
        const sideInvert = ctx.createGain(); sideInvert.gain.value = -0.5;
@@ -1799,19 +1777,17 @@ class AudioService {
        msSplitter.connect(midSum, 0); msSplitter.connect(midSum, 1);
        msSplitter.connect(sideDiff, 0); msSplitter.connect(sideInvert, 1); sideInvert.connect(sideDiff);
        
-       // Side Processing (Air & Width)
        const sideGain = ctx.createGain();
        sideGain.gain.value = settings.stereoWidth;
        
        const airFilter = ctx.createBiquadFilter(); 
        airFilter.type = 'highshelf'; 
        airFilter.frequency.value = settings.sacredGeometryMode && bassFreq > 20 ? bassFreq * Math.pow(this.PHI, 7) : 16000;
-       airFilter.gain.value = settings.bypassAir ? 0 : 0; // Default flat unless specific air boost logic added
+       airFilter.gain.value = settings.bypassAir ? 0 : 0; 
        
        sideDiff.connect(airFilter);
        airFilter.connect(sideGain);
        
-       // Decode MS to Stereo
        const outL = ctx.createGain();
        const outR = ctx.createGain();
        const sideOutInvert = ctx.createGain(); sideOutInvert.gain.value = -1;
@@ -1826,7 +1802,6 @@ class AudioService {
        outL.connect(msMerger, 0, 0);
        outR.connect(msMerger, 0, 1);
        
-       // --- 7. Final Polish ---
        const driveNode = ctx.createGain(); driveNode.gain.value = 1.0;
        const saturation = ctx.createWaveShaper(); 
        saturation.curve = this.makeSaturationCurve(settings.saturationType, 8192);
@@ -1839,7 +1814,7 @@ class AudioService {
        compressor.release.value = 0.25;
        
        const finalGain = ctx.createGain();
-       finalGain.gain.value = 1.4; // Matching playback gain
+       finalGain.gain.value = 1.4; 
        
        msMerger.connect(driveNode);
        driveNode.connect(saturation);
@@ -1848,9 +1823,9 @@ class AudioService {
        
        finalGain.connect(ctx.destination);
        
-       // Run
        source.start(0);
        const rendered = await ctx.startRendering();
+       logger.success('Offline render complete', 'RENDER_DONE');
        
        return this.bufferToWave(rendered);
   }

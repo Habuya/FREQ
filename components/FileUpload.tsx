@@ -1,6 +1,5 @@
-
 import React, { useRef, useState } from 'react';
-import { UploadCloud, FileAudio, Layers, Link as LinkIcon, Youtube, Music, ArrowRight, Search } from 'lucide-react';
+import { UploadCloud, FileAudio, Layers, Link as LinkIcon, Youtube, Music, ArrowRight, CornerDownRight } from 'lucide-react';
 
 interface FileUploadProps {
   onFileSelect: (files: File[]) => void;
@@ -28,154 +27,110 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, onUrlImport, isLo
     if (mode !== 'file') return;
     e.preventDefault();
     setIsDragging(false);
-    
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const audioFiles = Array.from(e.dataTransfer.files).filter((f: File) => f.type.startsWith('audio/'));
-      if (audioFiles.length > 0) {
-        onFileSelect(audioFiles);
-      }
+      if (audioFiles.length > 0) onFileSelect(audioFiles);
     }
   };
-
-  const handleClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      onFileSelect(Array.from(e.target.files));
-    }
-  };
-
-  const handleUrlSubmit = (e: React.FormEvent) => {
-      e.preventDefault();
-      if (url.trim()) {
-          onUrlImport(url);
-      }
-  };
-
-  // Detect platform for styling
-  const isYoutube = url.includes('youtube.com') || url.includes('youtu.be');
-  const isSpotify = url.includes('spotify.com');
 
   return (
     <div className="w-full max-w-xl mx-auto">
-        {/* Tabs */}
-        <div className="flex p-1 bg-slate-800/50 rounded-xl mb-4 border border-slate-700/50 w-fit mx-auto backdrop-blur-sm">
+        {/* Tabs - Tech Style */}
+        <div className="flex mb-4">
             <button 
                 onClick={() => setMode('file')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${mode === 'file' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/20' : 'text-slate-400 hover:text-white'}`}
+                className={`flex-1 flex items-center justify-center gap-2 py-2 text-[10px] font-mono uppercase tracking-widest border border-white/10 transition-colors ${mode === 'file' ? 'bg-white/5 text-white border-b-blue-500' : 'text-slate-500 hover:text-white'}`}
             >
-                <UploadCloud size={16} /> Upload
+                LOCAL_FILE
             </button>
             <button 
                 onClick={() => setMode('url')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${mode === 'url' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/20' : 'text-slate-400 hover:text-white'}`}
+                className={`flex-1 flex items-center justify-center gap-2 py-2 text-[10px] font-mono uppercase tracking-widest border border-l-0 border-white/10 transition-colors ${mode === 'url' ? 'bg-white/5 text-white border-b-blue-500' : 'text-slate-500 hover:text-white'}`}
             >
-                <LinkIcon size={16} /> Link
+                NETWORK_STREAM
             </button>
         </div>
 
         {mode === 'file' ? (
             <div
-              onClick={isLoading ? undefined : handleClick}
+              onClick={isLoading ? undefined : () => fileInputRef.current?.click()}
               onDragOver={isLoading ? undefined : handleDragOver}
               onDragLeave={isLoading ? undefined : handleDragLeave}
               onDrop={isLoading ? undefined : handleDrop}
               className={`
-                relative group cursor-pointer 
-                border-2 border-dashed rounded-2xl p-10 
-                transition-all duration-300 ease-in-out
+                relative cursor-pointer 
+                bg-black/20 border-2 border-dashed
+                transition-all duration-200 ease-out
                 flex flex-col items-center justify-center
-                h-64 bg-slate-800/20 backdrop-blur-sm
+                h-64
                 ${isDragging 
-                  ? 'border-indigo-500 bg-indigo-500/10 scale-[1.02]' 
-                  : 'border-slate-600 hover:border-indigo-400 hover:bg-slate-800/40'}
+                  ? 'border-blue-500 bg-blue-900/10' 
+                  : 'border-white/10 hover:border-white/30 hover:bg-white/5'}
                 ${isLoading ? 'opacity-50 cursor-wait pointer-events-none' : ''}
               `}
             >
               <input
                 type="file"
                 ref={fileInputRef}
-                onChange={handleChange}
+                onChange={(e) => e.target.files && onFileSelect(Array.from(e.target.files))}
                 accept="audio/*"
                 multiple 
                 className="hidden"
               />
 
-              <div className={`
-                w-20 h-20 rounded-full flex items-center justify-center mb-4 transition-transform duration-300
-                ${isDragging ? 'scale-110 bg-indigo-500' : 'bg-slate-700 group-hover:bg-slate-600'}
-              `}>
+              <div className={`p-4 mb-4 border border-white/5 bg-black/40 text-slate-400`}>
                 {isLoading ? (
-                  <div className="animate-spin w-8 h-8 border-4 border-slate-300 border-t-indigo-500 rounded-full"></div>
+                  <div className="animate-spin w-8 h-8 border-2 border-slate-700 border-t-blue-500"></div>
                 ) : (
-                  <div className="relative">
-                     <UploadCloud 
-                      size={40} 
-                      className={`text-slate-300 ${isDragging ? 'text-white' : ''}`} 
-                    />
-                    <Layers size={16} className="absolute -bottom-1 -right-2 text-indigo-400 bg-slate-800 rounded-full p-0.5" />
-                  </div>
+                   <UploadCloud size={32} />
                 )}
               </div>
 
-              <h3 className="text-xl font-semibold text-slate-200 mb-2">
-                {isLoading ? 'Processing Audio...' : 'Upload Tracks'}
-              </h3>
-              
-              <p className="text-slate-400 text-sm text-center max-w-xs">
-                {isLoading 
-                  ? 'Analyzing harmonic content...' 
-                  : 'Drag & drop single tracks or entire albums (Batch Mode)'}
-              </p>
-
-              {!isLoading && (
-                <div className="absolute bottom-4 flex gap-4 opacity-0 group-hover:opacity-100 transition-opacity text-xs text-indigo-400 font-mono">
-                  <span className="flex items-center gap-1"><Layers size={12}/> BATCH PROCESSING READY</span>
-                </div>
+              {isLoading && (
+                 <>
+                    <h3 className="text-sm font-bold text-white mb-1 tracking-widest uppercase font-mono animate-pulse">
+                        PROCESSING_DATA...
+                    </h3>
+                    <p className="text-slate-500 text-[10px] font-mono uppercase">
+                        CALCULATING_PHASE_OFFSET...
+                    </p>
+                 </>
               )}
+              
+              {/* Decor lines */}
+              <div className="absolute top-0 left-0 w-3 h-3 border-t-2 border-l-2 border-blue-500/50 -translate-x-1 -translate-y-1"></div>
+              <div className="absolute bottom-0 right-0 w-3 h-3 border-b-2 border-r-2 border-blue-500/50 translate-x-1 translate-y-1"></div>
             </div>
         ) : (
             <div className={`
-                relative border-2 border-slate-700 rounded-2xl p-10 
+                relative bg-black/20 border border-white/10
                 flex flex-col items-center justify-center
-                h-64 bg-slate-800/20 backdrop-blur-sm
+                h-64 p-8
                 ${isLoading ? 'opacity-50 pointer-events-none' : ''}
             `}>
-                <div className={`
-                    w-16 h-16 rounded-full flex items-center justify-center mb-6 transition-colors duration-300
-                    ${isYoutube ? 'bg-red-600/20 text-red-500' : isSpotify ? 'bg-green-500/20 text-green-500' : 'bg-slate-700 text-slate-400'}
-                `}>
-                    {isYoutube ? <Youtube size={32} /> : isSpotify ? <Music size={32} /> : <LinkIcon size={32} />}
-                </div>
-
-                <form onSubmit={handleUrlSubmit} className="w-full max-w-sm relative">
+                <form onSubmit={(e) => { e.preventDefault(); if(url.trim()) onUrlImport(url); }} className="w-full relative">
+                    <div className="text-[10px] font-mono text-slate-500 mb-2 flex items-center gap-1 uppercase tracking-wider">
+                        <CornerDownRight size={10} /> Enter Stream URL
+                    </div>
                     <input 
                         type="text" 
                         value={url}
                         onChange={(e) => setUrl(e.target.value)}
-                        placeholder="Paste YouTube or Spotify link..."
-                        className="w-full bg-slate-900/50 border border-slate-600 rounded-xl py-3 pl-4 pr-12 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
+                        placeholder="https://..."
+                        className="w-full bg-black/50 border border-slate-700 py-3 pl-4 pr-12 text-xs font-mono text-white placeholder:text-slate-700 focus:outline-none focus:border-blue-500 transition-colors"
                         disabled={isLoading}
                     />
                     <button 
                         type="submit"
                         disabled={!url.trim() || isLoading}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        className="absolute right-1 top-[25px] p-2 bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
-                        {isLoading ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <ArrowRight size={16} />}
+                        {isLoading ? <div className="w-3 h-3 border-2 border-white/30 border-t-white animate-spin" /> : <ArrowRight size={14} />}
                     </button>
+                    <div className="mt-4 flex gap-4 justify-center text-slate-600">
+                        <Youtube size={16} /> <Music size={16} /> <LinkIcon size={16} />
+                    </div>
                 </form>
-                
-                <div className="mt-4 flex gap-4 text-[10px] text-slate-500 font-mono uppercase tracking-wide">
-                    <span className={`flex items-center gap-1 transition-colors ${isYoutube ? 'text-red-400' : ''}`}>
-                        <Youtube size={12} /> YouTube
-                    </span>
-                    <span className={`flex items-center gap-1 transition-colors ${isSpotify ? 'text-green-400' : ''}`}>
-                        <Music size={12} /> Spotify
-                    </span>
-                </div>
             </div>
         )}
     </div>

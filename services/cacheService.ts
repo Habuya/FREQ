@@ -1,5 +1,3 @@
-
-
 import { MasteringPreset, AudioSettings } from '../types';
 
 export interface BassHistoryEntry {
@@ -220,8 +218,8 @@ class CacheService {
             this.closeDB();
             
             if (attempt === 0) {
-                console.warn("IndexedDB initialization warning (attempt 1):", error ? error.message : "Unknown error");
-                console.warn("Attempting database recovery (reset)...");
+                // Downgraded to info to reduce alarm in console if it's transient
+                console.info("IndexedDB initialization retry (attempt 1):", error ? error.message : "Unknown error");
                 
                 try {
                     const delReq = indexedDB.deleteDatabase(DB_NAME);
@@ -281,7 +279,7 @@ class CacheService {
       );
 
       if (isConnectionError) {
-        console.warn('DB closed unexpectedly, retrying transaction...');
+        // Retry logic for transaction errors
         this.closeDB(); // Force reset
         return await this._runTransaction(storeName, mode, operation);
       }
@@ -358,7 +356,7 @@ class CacheService {
               return store.put(preset);
           });
       } catch (e) {
-          console.warn("Failed to save preset (DB disabled?)", e);
+          // Silent fail for UX smoothness
       }
   }
 
@@ -368,7 +366,7 @@ class CacheService {
               return store.delete(id);
           });
       } catch (e) {
-          console.warn("Failed to delete preset", e);
+          // Silent fail
       }
   }
 
@@ -500,6 +498,7 @@ class CacheService {
          const trans = db.transaction(STORE_BUFFERS, 'readwrite');
          trans.objectStore(STORE_BUFFERS).clear();
       }
+      // Catch other potential errors silently to prevent app crash if saving fails
     }
   }
 

@@ -1,5 +1,4 @@
 
-
 import { useState, useEffect, useRef } from 'react';
 import { audioService } from '../services/audioService';
 import { cacheService } from '../services/cacheService';
@@ -27,13 +26,16 @@ export const useAudioProcessor = () => {
   const [isCachedResult, setIsCachedResult] = useState<boolean>(false);
   const [isBufferCached, setIsBufferCached] = useState<boolean>(false);
   
-  // A/B Compare State
-  const [isComparing, setIsComparing] = useState<boolean>(false);
+  // DJ Crossfade State
+  const [crossfadeValue, setCrossfadeValue] = useState<number>(1.0); // 1.0 = Fully Processed (Pi 23)
 
   // Real-time Metrics
   const [currentTHD, setCurrentTHD] = useState<number>(0);
   const [spectralBalanceScore, setSpectralBalanceScore] = useState<number>(100);
   const thdIntervalRef = useRef<number | null>(null);
+
+  // Mount tracking
+  const isMounted = useRef(true);
 
   // Settings State
   const [sensitivity, setSensitivity] = useState<number>(50);
@@ -74,10 +76,21 @@ export const useAudioProcessor = () => {
     autoEqIntensity: 0.5
   });
 
+  // Cleanup on unmount
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+        isMounted.current = false;
+        audioService.stop();
+    };
+  }, []);
+
   // Load presets on mount
   useEffect(() => {
     cacheService.getAllPresets().then(loadedPresets => {
-        setPresets(loadedPresets);
+        if (isMounted.current) {
+            setPresets(loadedPresets);
+        }
     });
   }, []);
 
@@ -134,17 +147,21 @@ export const useAudioProcessor = () => {
       
       await cacheService.savePreset(newPreset);
       const updatedList = await cacheService.getAllPresets();
-      setPresets(updatedList);
-      setCurrentPresetId(newPreset.id);
+      if (isMounted.current) {
+        setPresets(updatedList);
+        setCurrentPresetId(newPreset.id);
+      }
   };
 
   const deletePreset = async (id: string) => {
       await cacheService.deletePreset(id);
       const updatedList = await cacheService.getAllPresets();
-      setPresets(updatedList);
-      if (currentPresetId === id) {
-          setCurrentPresetId(updatedList[0]?.id || '');
-          if (updatedList[0]) updateSettings(updatedList[0].data);
+      if (isMounted.current) {
+        setPresets(updatedList);
+        if (currentPresetId === id) {
+            setCurrentPresetId(updatedList[0]?.id || '');
+            if (updatedList[0]) updateSettings(updatedList[0].data);
+        }
       }
   };
 
@@ -184,12 +201,12 @@ export const useAudioProcessor = () => {
 
           // If we reach here, it's either a streaming link (YouTube/Spotify) or CORS blocked
           // Since we don't have a backend proxy, we must inform the user.
-          setProcessState('idle');
+          if (isMounted.current) setProcessState('idle');
           alert("Backend Service Unavailable: \n\nDirect import from YouTube/Spotify requires a server-side extraction proxy to bypass CORS and DRM. \n\nThis feature is implemented in the UI for demonstration purposes. Please use the 'Upload' tab with local files.");
           
       } catch (e) {
           console.error("URL Import Error", e);
-          setProcessState('idle');
+          if (isMounted.current) setProcessState('idle');
           alert("Failed to import from URL.");
       }
   };
@@ -214,7 +231,8 @@ export const useAudioProcessor = () => {
       setIsBassEstimated(false);
       setCurrentTHD(0);
       setSpectralBalanceScore(100);
-      setIsComparing(false); // Reset comparison mode
+      setCrossfadeValue(1.0); // Reset to Wet (Processed)
+      audioService.setCrossfade(1.0);
       
       // 1. Buffer Cache Handling
       const cachedBufferData = await cacheService.loadBuffer(selectedFile);
@@ -301,7 +319,7 @@ export const useAudioProcessor = () => {
     } catch (error) {
       console.error("Error loading file:", error);
       alert("Could not load audio file.");
-      setProcessState('idle');
+      if (isMounted.current) setProcessState('idle');
     }
   };
 
@@ -316,10 +334,12 @@ export const useAudioProcessor = () => {
     
     const bassFreq = await audioService.detectBassRoot(bassSensitivity);
     
-    setDetectedPitch(detected);
-    setDetectedBass(bassFreq);
-    setIsBassEstimated(audioService.isBassEstimated);
-    setIsCachedResult(false);
+    if (isMounted.current) {
+        setDetectedPitch(detected);
+        setDetectedBass(bassFreq);
+        setIsBassEstimated(audioService.isBassEstimated);
+        setIsCachedResult(false);
+    }
     
     await cacheService.saveAnalysis(file, {
         pitch: detected,
@@ -330,23 +350,23 @@ export const useAudioProcessor = () => {
         isBassEstimated: audioService.isBassEstimated
     });
     
-    setIsReanalyzing(false);
+    if (isMounted.current) setIsReanalyzing(false);
   };
 
-  const togglePlay = () => {
+  const togglePlay = async () => {
+    // Explicitly resume on user interaction to satisfy browser policies
+    await audioService.resumeContext();
+
     if (isPlaying) {
       audioService.pause();
       setIsPlaying(false);
     } else {
-      audioService.play(() => setIsPlaying(false));
+      audioService.play(() => {
+          // Guard state update
+          if (isMounted.current) setIsPlaying(false);
+      });
       setIsPlaying(true);
     }
-  };
-
-  // Toggle A/B Comparison
-  const toggleCompare = (active: boolean) => {
-      setIsComparing(active);
-      audioService.toggleBypass(active);
   };
 
   // Metrics Polling Loop
@@ -355,19 +375,20 @@ export const useAudioProcessor = () => {
         thdIntervalRef.current = window.setInterval(() => {
             // THD
             const thd = audioService.calculateTHD();
-            if (thd !== -1) { 
+            if (thd !== -1 && isMounted.current) { 
                 setCurrentTHD(prev => prev + (thd - prev) * 0.2);
             }
             
             // Spectral Balance Score (only if active or just visualization)
-            // Even if autoEq is off, we can measure the score
             const score = audioService.getSpectralBalanceScore();
-            setSpectralBalanceScore(prev => prev + (score - prev) * 0.1); // Smooth transition
+            if (isMounted.current) {
+                setSpectralBalanceScore(prev => prev + (score - prev) * 0.1); 
+            }
 
         }, 150);
     } else {
         if (thdIntervalRef.current) clearInterval(thdIntervalRef.current);
-        setCurrentTHD(0);
+        if (isMounted.current) setCurrentTHD(0);
         // Don't reset score to 0 on pause, keep last known or default 100
     }
 
@@ -382,6 +403,23 @@ export const useAudioProcessor = () => {
     audioService.setTargetFrequency(preset);
   };
 
+  // Crossfade Handler
+  const handleCrossfade = (val: number) => {
+      // Magnetic Snap Logic
+      let newVal = val;
+      if (Math.abs(val - 0.5) < 0.05) newVal = 0.5;
+      if (val < 0.02) newVal = 0;
+      if (val > 0.98) newVal = 1.0;
+      
+      setCrossfadeValue(newVal);
+      audioService.setCrossfade(newVal);
+      
+      // Haptic on Snap
+      if (newVal !== val && navigator.vibrate) {
+          navigator.vibrate(10);
+      }
+  };
+
   const download = async () => {
     if (!file && batchQueue.length === 0) return;
 
@@ -394,6 +432,7 @@ export const useAudioProcessor = () => {
           setBatchProgress({ current: 0, total: batchQueue.length });
           
           for (let i = 0; i < batchQueue.length; i++) {
+              if (!isMounted.current) break;
               const currentFile = batchQueue[i];
               setBatchProgress({ current: i + 1, total: batchQueue.length });
               
@@ -474,8 +513,10 @@ export const useAudioProcessor = () => {
       console.error("Export failed:", error);
       alert("Failed to export audio.");
     } finally {
-      setIsDownloading(false);
-      setBatchProgress(null);
+      if (isMounted.current) {
+        setIsDownloading(false);
+        setBatchProgress(null);
+      }
     }
   };
 
@@ -530,8 +571,11 @@ export const useAudioProcessor = () => {
       currentTHD,
       spectralBalanceScore
     },
-    isComparing,
-    toggleCompare,
+    // Crossfade (was isComparing)
+    crossfadeValue,
+    setCrossfadeValue: handleCrossfade,
+    isComparing: crossfadeValue < 0.5, // Derived state for visualizer bypass labels
+    
     sensitivity,
     setSensitivity,
     bassSensitivity,

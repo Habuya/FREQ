@@ -1,27 +1,39 @@
-
-
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Visualizer from './components/Visualizer';
 import ControlPanel from './components/ControlPanel';
 import FileUpload from './components/FileUpload';
 import SettingsModal from './components/SettingsModal';
-import { TuningPreset, TUNING_LABELS } from './types';
+import Sidebar from './components/Sidebar';
+import MobileNav from './components/MobileNav';
+import DebugConsole from './components/DebugConsole';
+import { TuningPreset } from './types';
 import { useAudioProcessor } from './hooks/useAudioProcessor';
-import { Sparkles, Info, Github, Clock, Activity, Settings2, ShieldCheck, Waves, Music2, RefreshCw, Zap, ArrowRight, Settings, Loader2 } from 'lucide-react';
+import { Activity, Waves, RefreshCw, Maximize2, Terminal, RotateCcw, Pi } from 'lucide-react';
+import { logger } from './services/logger';
+
+type ViewMode = 'dashboard' | 'settings';
 
 const App: React.FC = () => {
-  // Use the new Audio Processor Hook
   const processor = useAudioProcessor();
+  const [activeView, setActiveView] = useState<ViewMode>('dashboard');
+  const [showLocalSettings, setShowLocalSettings] = useState<boolean>(false);
+  const [showDebug, setShowDebug] = useState(false);
+  const mainRef = useRef<HTMLDivElement>(null);
 
-  // Local UI State (Not related to Audio Logic)
-  const [showSettings, setShowSettings] = useState<boolean>(false);
-  const [showGlobalSettings, setShowGlobalSettings] = useState(false);
+  // Mouse Tracking Logic
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (mainRef.current) {
+        const x = e.clientX;
+        const y = e.clientY;
+        mainRef.current.style.setProperty('--mouse-x', `${x}px`);
+        mainRef.current.style.setProperty('--mouse-y', `${y}px`);
+      }
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, []);
 
-  // Derived Values for UI
-  const isAlreadyNatureTuned = processor.analysis.detectedPitch < 435 && processor.analysis.detectedPitch > 410;
-  
-  // Calculate the displayed frequencies based on active preset
-  // If comparing, show Source Pitch, else show Target
   const displayedPitch = processor.isComparing 
      ? processor.analysis.detectedPitch 
      : (processor.tuningPreset === TuningPreset.STANDARD_440 
@@ -34,291 +46,342 @@ const App: React.FC = () => {
         ? processor.analysis.detectedBass
         : processor.analysis.detectedBass * (processor.tuningPreset / (processor.analysis.detectedPitch || 440)));
   
-  // Resolve active preset name
   const activePresetName = processor.presets.list.find(p => p.id === processor.presets.currentId)?.name;
 
-  return (
-    <div className="min-h-screen bg-[#0f172a] text-white selection:bg-indigo-500 selection:text-white">
-      {/* Background Gradient Orbs */}
-      <div className="fixed top-[-20%] left-[-10%] w-[500px] h-[500px] bg-purple-600/20 blur-[120px] rounded-full pointer-events-none" />
-      <div className="fixed bottom-[-20%] right-[-10%] w-[500px] h-[500px] bg-indigo-600/20 blur-[120px] rounded-full pointer-events-none" />
+  // Determine if UI should be interactive
+  const isProcessing = processor.processState === 'decoding' || processor.processState === 'analyzing';
 
-      {/* Batch Processing Overlay */}
+  const handleReset = () => {
+      processor.reset();
+      setActiveView('dashboard');
+  };
+
+  return (
+    <div 
+      ref={mainRef}
+      className="flex h-screen w-screen overflow-hidden bg-[#141417] text-slate-400 selection:bg-blue-500/30 selection:text-blue-200"
+      style={{
+        background: `radial-gradient(circle 800px at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(30, 32, 40, 0.4), #141417 100%)`
+      }}
+    >
+      
+      {/* Batch Processing Overlay - High Z-Index */}
       {processor.batchProgress && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
-             <div className="bg-slate-900 border border-slate-700 p-8 rounded-2xl shadow-2xl flex flex-col items-center max-w-sm w-full">
-                 <Loader2 size={48} className="text-indigo-400 animate-spin mb-4" />
-                 <h2 className="text-xl font-bold text-white mb-2">Processing Batch</h2>
-                 <p className="text-slate-400 text-sm mb-6">Optimizing harmonics & dithering...</p>
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-md animate-in fade-in">
+             <div className="tech-panel p-8 flex flex-col items-center max-w-sm w-full border border-blue-500/20">
+                 <RefreshCw size={48} className="text-blue-500 animate-spin mb-4" />
+                 <h2 className="text-xl font-bold text-white mb-2 tracking-widest uppercase">Batch Processing</h2>
+                 <p className="text-slate-500 text-xs mb-6 font-mono tracking-widest">OPTIMIZING HARMONICS...</p>
                  
-                 <div className="w-full bg-slate-800 rounded-full h-2 mb-2 overflow-hidden">
+                 <div className="w-full bg-slate-900 h-1 mb-2 overflow-hidden">
                      <div 
-                        className="bg-indigo-500 h-full transition-all duration-300"
+                        className="bg-blue-500 h-full shadow-[0_0_10px_rgba(59,130,246,0.8)]"
                         style={{ width: `${(processor.batchProgress.current / processor.batchProgress.total) * 100}%` }}
                      />
                  </div>
-                 <div className="flex justify-between w-full text-xs font-mono text-slate-500">
-                     <span>Track {processor.batchProgress.current} of {processor.batchProgress.total}</span>
+                 <div className="flex justify-between w-full text-[10px] font-mono text-slate-500">
+                     <span>TRACK {processor.batchProgress.current} / {processor.batchProgress.total}</span>
                      <span>{Math.round((processor.batchProgress.current / processor.batchProgress.total) * 100)}%</span>
                  </div>
              </div>
           </div>
       )}
 
-      {/* Settings Modal */}
-      <SettingsModal 
-        isOpen={showGlobalSettings} 
-        onClose={() => setShowGlobalSettings(false)}
-        settings={processor.audioSettings}
-        onUpdate={processor.updateSettings}
-        detectedBass={processor.analysis.detectedBass}
-        isBassEstimated={processor.analysis.isBassEstimated}
-        onReanalyze={processor.reanalyze}
-        presets={processor.presets}
+      {/* LEFT: Industrial Sidebar (Desktop Only) */}
+      <Sidebar 
+        hasFile={!!processor.file} 
+        onReset={handleReset}
+        activeView={activeView}
+        onNavigate={setActiveView}
+        processState={processor.processState}
+        onToggleDebug={() => setShowDebug(!showDebug)}
       />
 
-      <main className="container mx-auto px-4 py-8 relative z-10 max-w-4xl">
+      {/* RIGHT: Main Content */}
+      <div className="flex-1 flex flex-col relative overflow-hidden">
         
-        {/* Header */}
-        <header className="flex justify-between items-center mb-12">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20">
-              <Sparkles className="text-white" size={20} />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight text-white">
-                Zen<span className="text-indigo-400">Tuner</span>
-              </h1>
-              <p className="text-xs text-slate-400 font-mono tracking-widest">
-                AUDIOPHILE HARMONIZER
-              </p>
-            </div>
-          </div>
-          <div className="flex gap-4 items-center">
-            <button 
-                onClick={() => setShowGlobalSettings(true)}
-                className="text-slate-400 hover:text-white transition-colors p-2 rounded-lg hover:bg-slate-800"
-                title="Global Audio Settings"
-            >
-              <Settings size={20} />
-            </button>
-            <div className="w-px h-6 bg-slate-700" />
-            <button className="text-slate-400 hover:text-white transition-colors">
-              <Github size={20} />
-            </button>
-            <button className="text-slate-400 hover:text-white transition-colors">
-              <Info size={20} />
-            </button>
-          </div>
-        </header>
-
-        {/* Main Content Area */}
-        <div className="space-y-8">
-          
-          {/* Visualizer Section */}
-          <div className="relative">
-             {processor.processState === 'idle' && !processor.file && (
-               <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-900/80 backdrop-blur-sm rounded-xl border border-slate-700">
-                 <p className="text-slate-500 font-mono text-sm">VISUALIZATION STANDBY</p>
-               </div>
-             )}
-             
-             {/* Comparison Overlay */}
-             {processor.isComparing && (
-                 <div className="absolute top-4 right-4 z-40 bg-amber-500 text-white text-[10px] font-bold px-2 py-1 rounded shadow-lg animate-pulse">
-                     BYPASS ACTIVE
+        {/* Top Bar (Breadcrumbs / Context) */}
+        <div className="h-14 md:h-16 border-b border-white/5 flex items-center justify-between px-4 md:px-8 bg-black/20 backdrop-blur-sm z-30 shrink-0">
+           <div className="flex items-center gap-2">
+              {/* Mobile Branding (Visible only when Sidebar is hidden) */}
+              <div className="md:hidden flex items-center gap-2 mr-2 border-r border-white/10 pr-4">
+                 <div className="flex items-center text-blue-500 gap-0.5">
+                    <Pi size={18} strokeWidth={2.5} />
+                    <span className="font-bold font-mono text-sm">23</span>
                  </div>
-             )}
+                 <span className="font-bold text-white tracking-widest font-mono text-xs">ZEN</span>
+              </div>
 
-             {/* Analysis State Overlay */}
-             {processor.processState === 'analyzing' && (
-                <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-slate-900/90 backdrop-blur-md rounded-xl border border-indigo-500/30">
-                  <Activity className="text-indigo-400 animate-pulse mb-4" size={48} />
-                  <h3 className="text-xl font-semibold text-white mb-2">Scanning Harmonic Content</h3>
-                  <div className="w-64 h-1 bg-slate-700 rounded-full overflow-hidden">
-                    <div className="h-full bg-indigo-500 animate-[progress_1.5s_ease-in-out_infinite]"></div>
+              <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-[0.2em] text-slate-500">
+                 <Terminal size={12} className="hidden sm:block" />
+                 <span className="hidden sm:inline">SYSTEM</span>
+                 <span className="text-slate-700 hidden sm:inline">/</span>
+                 <span className={processor.file ? "text-white" : "text-slate-500"}>
+                   {activeView === 'settings' ? "CONFIG_MATRIX" : (processor.file ? "ANALYZER" : "INPUT")}
+                 </span>
+              </div>
+           </div>
+           
+           <div className="flex items-center gap-4">
+              {processor.file && (
+                <>
+                  <button 
+                    onClick={handleReset}
+                    className="hidden sm:flex items-center gap-2 px-3 py-1 bg-white/5 border border-white/10 text-slate-400 text-[9px] font-mono tracking-widest hover:bg-white/10 hover:text-white transition-colors"
+                    title="Close File"
+                  >
+                    <RotateCcw size={12} />
+                    <span>RESET</span>
+                  </button>
+
+                  <div className="px-3 py-1 bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[9px] font-mono tracking-widest flex items-center gap-2">
+                     <div className="w-1.5 h-1.5 bg-blue-500 animate-pulse"></div>
+                     <span className="hidden sm:inline">DSP_ACTIVE</span>
+                     <span className="sm:hidden">ON</span>
                   </div>
-                  <p className="text-indigo-300 font-mono text-xs mt-3">ANALYZING PITCH REFERENCE...</p>
-                </div>
-             )}
+                </>
+              )}
+           </div>
+        </div>
 
-            <Visualizer 
-              isPlaying={processor.isPlaying || processor.processState === 'analyzing'} 
-              fundamentalHz={displayedPitch} 
-              bassHz={displayedBass}
-              cymaticsMode={processor.audioSettings.cymaticsMode}
-              phaseLockEnabled={processor.audioSettings.phaseLockEnabled}
-              deepZenBass={processor.audioSettings.deepZenBass}
-            />
-          </div>
-
-          {/* Controls or Upload */}
-          {!processor.file ? (
-            <FileUpload 
-              onFileSelect={processor.loadFile} 
-              onUrlImport={processor.loadFromUrl}
-              isLoading={processor.processState === 'decoding'} 
-            />
+        {/* Scrollable Workspace */}
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-8 relative pb-24 md:pb-12">
+          
+          {activeView === 'settings' ? (
+             <div className="max-w-3xl mx-auto h-full min-h-[600px] animate-in slide-in-from-right-4 fade-in duration-300">
+                 <SettingsModal 
+                    isOpen={true} 
+                    onClose={() => setActiveView('dashboard')}
+                    settings={processor.audioSettings}
+                    onUpdate={processor.updateSettings}
+                    detectedBass={processor.analysis.detectedBass}
+                    isBassEstimated={processor.analysis.isBassEstimated}
+                    onReanalyze={processor.reanalyze}
+                    presets={processor.presets}
+                    variant="embedded"
+                 />
+             </div>
           ) : (
-            <div className={`animate-in fade-in slide-in-from-bottom-4 duration-500 ${processor.processState !== 'ready' ? 'pointer-events-none opacity-50' : ''}`}>
-              <ControlPanel 
-                isPlaying={processor.isPlaying}
-                targetFrequency={processor.tuningPreset}
-                onPlayPause={processor.togglePlay}
-                onTuningChange={processor.setTuningPreset}
-                onDownload={processor.download}
-                isDownloading={processor.isDownloading}
-                fileName={processor.file.name}
-                thdValue={processor.analysis.currentTHD}
-                isComparing={processor.isComparing}
-                onToggleCompare={processor.toggleCompare}
-                batchCount={processor.batchQueue.length}
-                activePresetName={activePresetName}
-              />
+            /* DASHBOARD VIEW */
+            <div className={`max-w-[1600px] mx-auto space-y-6 md:space-y-8 transition-all duration-300`}>
 
-              {/* Info Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
-                
-                {/* Source Analysis Card */}
-                <div className={`
-                  bg-slate-800/30 p-4 rounded-xl border transition-all duration-300 flex flex-col
-                  ${processor.tuningPreset === TuningPreset.STANDARD_440 ? 'border-indigo-500/50 shadow-lg shadow-indigo-500/10' : 'border-slate-700'}
-                `}>
-                  <div className="flex justify-between items-start mb-1">
-                    <h4 className="text-indigo-400 font-medium text-sm flex items-center gap-2">
-                      Original Source
-                      {processor.tuningPreset === TuningPreset.STANDARD_440 && <span className="text-[10px] bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full">RAW</span>}
-                    </h4>
-                    <button 
-                      onClick={() => setShowSettings(!showSettings)}
-                      className={`p-1 rounded-md transition-colors ${showSettings ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-500 hover:text-slate-300'}`}
-                      title="Adjust Detection Sensitivity"
-                    >
-                      <Settings2 size={14} />
-                    </button>
-                  </div>
+              {/* Visualizer Section */}
+              <div className="relative">
+                 {processor.processState === 'idle' && !processor.file && (
+                   <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
+                     <div className="flex flex-col items-center gap-3 opacity-60">
+                       <div className="w-3 h-3 bg-blue-500 animate-ping rounded-full"></div>
+                       <p className="text-blue-500 font-mono text-xs tracking-[0.5em] uppercase">System Ready</p>
+                     </div>
+                   </div>
+                 )}
+                 
+                 {processor.isComparing && (
+                     <div className="absolute top-0 right-0 z-40 bg-amber-500 text-black text-[10px] font-bold px-2 py-1 tracking-widest shadow-[0_0_15px_rgba(245,158,11,0.6)] animate-pulse border-l-2 border-black">
+                         BYPASS
+                     </div>
+                 )}
 
-                  <div className="flex flex-col gap-2 mb-3">
-                    <div className="flex justify-between items-center p-2 bg-slate-900/40 rounded-lg border border-slate-700/50">
-                      <span className="text-slate-400 text-xs">Detected Ref</span>
-                      <span className="text-slate-200 font-bold text-sm font-mono">{processor.analysis.detectedPitch.toFixed(1)} Hz</span>
-                    </div>
-                    
-                    {processor.analysis.detectedBass > 0 && (
-                      <div className="flex justify-between items-center p-2 bg-lime-900/10 rounded-lg border border-lime-500/20">
-                         <span className="text-slate-400 text-xs">
-                             Bass Root {processor.analysis.isBassEstimated && "(Est)"}
-                         </span>
-                         <span className="text-lime-400 font-bold text-sm font-mono flex gap-2">
-                           {processor.analysis.detectedBass.toFixed(1)} Hz
-                           <span className="opacity-50">|</span>
-                           {processor.helpers.getNoteName(processor.analysis.detectedBass)}
-                         </span>
+                 {processor.processState === 'analyzing' && (
+                    <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm border border-blue-500/30">
+                      <Activity className="text-blue-500 animate-pulse mb-6 drop-shadow-[0_0_10px_rgba(59,130,246,0.8)]" size={48} />
+                      <h3 className="text-xl font-bold text-white mb-2 tracking-[0.2em] uppercase text-center">Scanning</h3>
+                      <div className="w-48 md:w-64 h-px bg-slate-800 mb-4 overflow-hidden relative">
+                        <div className="absolute top-0 bottom-0 w-20 bg-blue-500 animate-[shimmer_1s_infinite] shadow-[0_0_10px_rgba(59,130,246,0.8)]"></div>
                       </div>
-                    )}
-                  </div>
-                  
-                  {/* Settings Panel Inline */}
-                  {showSettings && (
-                    <div className="mt-2 mb-3 pt-3 border-t border-slate-700/50 animate-in slide-in-from-top-2 fade-in space-y-3">
-                        <div>
-                            <div className="flex items-center justify-between mb-1">
-                                <label className="text-[10px] text-slate-400 font-mono uppercase">Pitch Sens</label>
-                                <span className="text-[10px] text-indigo-400">{processor.sensitivity}%</span>
+                      <div className="font-mono text-blue-400 text-[10px] tracking-widest flex gap-4">
+                         <span>CALC_PHASE</span>
+                      </div>
+                    </div>
+                 )}
+
+                <Visualizer 
+                  isPlaying={processor.isPlaying || processor.processState === 'analyzing'} 
+                  fundamentalHz={displayedPitch} 
+                  bassHz={displayedBass}
+                  cymaticsMode={processor.audioSettings.cymaticsMode}
+                  phaseLockEnabled={processor.audioSettings.phaseLockEnabled}
+                  deepZenBass={processor.audioSettings.deepZenBass}
+                />
+              </div>
+
+              {/* Controls or Upload */}
+              {!processor.file ? (
+                <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+                   <FileUpload 
+                     onFileSelect={processor.loadFile} 
+                     onUrlImport={processor.loadFromUrl}
+                     isLoading={processor.processState === 'decoding'} 
+                   />
+                </div>
+              ) : (
+                <div className={`space-y-6 animate-in fade-in slide-in-from-bottom-8 duration-700 relative z-30 ${isProcessing ? 'pointer-events-none opacity-50' : ''}`}>
+                  <ControlPanel 
+                    isPlaying={processor.isPlaying}
+                    targetFrequency={processor.tuningPreset}
+                    onPlayPause={processor.togglePlay}
+                    onTuningChange={processor.setTuningPreset}
+                    onDownload={processor.download}
+                    isDownloading={processor.isDownloading}
+                    fileName={processor.file.name}
+                    thdValue={processor.analysis.currentTHD}
+                    isComparing={processor.isComparing}
+                    crossfadeValue={processor.crossfadeValue}
+                    onCrossfadeChange={processor.setCrossfadeValue}
+                    batchCount={processor.batchQueue.length}
+                    activePresetName={activePresetName}
+                    spectralBalanceScore={processor.analysis.spectralBalanceScore}
+                  />
+
+                  {/* Info Cards Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      
+                      {/* Source Analysis Card */}
+                      <div className={`
+                        tech-panel p-6 flex flex-col transition-all duration-300 group
+                        ${processor.tuningPreset === TuningPreset.STANDARD_440 ? 'border-blue-500/30' : ''}
+                      `}>
+                        <div className="flex justify-between items-start mb-4 pb-2 border-b border-white/5">
+                          <h4 className="text-blue-400 text-[10px] flex items-center gap-2 uppercase tracking-[0.2em]">
+                            [INPUT_ANALYSIS]
+                          </h4>
+                          <button 
+                            onClick={() => setShowLocalSettings(!showLocalSettings)}
+                            className={`p-1 transition-colors ${showLocalSettings ? 'text-blue-400' : 'text-slate-600 hover:text-white'}`}
+                          >
+                            <Maximize2 size={14} />
+                          </button>
+                        </div>
+
+                        <div className="flex flex-col gap-4 mb-4">
+                          <div className="flex justify-between items-end">
+                            <span className="text-slate-500 text-[10px] uppercase tracking-wider">Inherent Pitch</span>
+                            <span className="text-white font-bold text-xl font-mono leading-none tracking-tighter">
+                                {processor.analysis.detectedPitch.toFixed(2)} <span className="text-[10px] text-slate-500">HZ</span>
+                            </span>
+                          </div>
+                          
+                          {processor.analysis.detectedBass > 0 && (
+                            <div className="flex justify-between items-end">
+                              <span className="text-slate-500 text-[10px] uppercase tracking-wider flex items-center gap-1">
+                                  Fund. {processor.analysis.isBassEstimated && <span className="text-amber-500">*</span>}
+                              </span>
+                              <div className="text-right flex items-baseline gap-2">
+                                  <span className="text-[10px] text-slate-600 font-mono">
+                                    {processor.helpers.getNoteName(processor.analysis.detectedBass)}
+                                  </span>
+                                  <span className="text-slate-300 font-bold text-xl font-mono leading-none tracking-tighter">
+                                    {processor.analysis.detectedBass.toFixed(1)} <span className="text-[10px] text-slate-500">HZ</span>
+                                  </span>
+                              </div>
                             </div>
-                            <input 
-                                type="range" min="0" max="100" value={processor.sensitivity} 
-                                onChange={(e) => processor.setSensitivity(Number(e.target.value))}
-                                className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-indigo-500 [&::-webkit-slider-thumb]:rounded-full"
-                            />
+                          )}
                         </div>
-                        <div className="flex items-center gap-2">
-                            <button 
-                                onClick={processor.reanalyze}
-                                disabled={processor.isReanalyzing}
-                                className="w-full bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs py-1.5 rounded flex items-center justify-center gap-2"
-                            >
-                                <RefreshCw size={12} className={processor.isReanalyzing ? "animate-spin" : ""} />
-                                Re-Analyze
-                            </button>
+                        
+                        {/* Mini Re-Analyze Panel Inline */}
+                        {showLocalSettings && (
+                          <div className="mt-2 mb-4 pt-4 border-t border-dashed border-white/10 animate-in slide-in-from-top-2 fade-in space-y-4">
+                              <div>
+                                  <div className="flex items-center justify-between mb-2">
+                                      <label className="text-[9px] text-slate-500 font-mono uppercase">Detect.Sensitivity</label>
+                                      <span className="text-[9px] text-blue-400 font-mono">VAL:{processor.sensitivity}</span>
+                                  </div>
+                                  <input 
+                                      type="range" min="0" max="100" value={processor.sensitivity} 
+                                      onChange={(e) => processor.setSensitivity(Number(e.target.value))}
+                                      className="tech-slider"
+                                  />
+                              </div>
+                              <button 
+                                  onClick={processor.reanalyze}
+                                  disabled={processor.isReanalyzing}
+                                  className="w-full bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 text-[10px] uppercase tracking-widest py-2 border border-blue-500/20 transition-colors flex items-center justify-center gap-2"
+                              >
+                                  <RefreshCw size={10} className={processor.isReanalyzing ? "animate-spin" : ""} />
+                                  Re-Scan Buffer
+                              </button>
+                          </div>
+                        )}
+                        
+                        <div className="flex gap-2 mt-auto pt-4 border-t border-white/5">
+                          <span className="text-[9px] bg-white/5 px-2 py-1 text-slate-500 font-mono border border-white/5">
+                              SR:{processor.helpers.sampleRate}
+                          </span>
+                          {processor.analysis.hasHiResContent ? (
+                            <span className="text-[9px] flex items-center gap-1 bg-blue-500/10 text-blue-400 px-2 py-1 border border-blue-500/20 font-mono">
+                                <Waves size={10} /> HI-RES
+                            </span>
+                          ) : (
+                            <span className="text-[9px] flex items-center gap-1 bg-white/5 text-slate-500 px-2 py-1 border border-white/5 font-mono">
+                                STD_RES
+                            </span>
+                          )}
                         </div>
-                    </div>
-                  )}
-                  
-                  <div className="flex flex-wrap gap-2 mt-2 mb-auto">
-                     <span className="text-[10px] border border-slate-600 rounded px-1 text-slate-500">
-                        {processor.helpers.sampleRate}Hz
-                     </span>
-                     {processor.analysis.hasHiResContent ? (
-                       <span className="text-[10px] flex items-center gap-1 bg-indigo-900/40 text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-500/30">
-                          <Waves size={10} /> Hi-Res
-                       </span>
-                     ) : (
-                       <span className="text-[10px] flex items-center gap-1 bg-amber-900/30 text-amber-500 px-1.5 py-0.5 rounded border border-amber-500/30">
-                          <Waves size={10} /> Std
-                       </span>
-                     )}
+                      </div>
+
+                      {/* Target Output Card */}
+                      <div className={`
+                        tech-panel p-6 flex flex-col justify-between transition-all duration-300
+                        ${processor.tuningPreset !== TuningPreset.STANDARD_440 ? 'border-blue-500/50 shadow-[0_0_20px_rgba(59,130,246,0.1)]' : ''}
+                      `}>
+                        <div>
+                          <h4 className="text-blue-400 font-medium mb-4 pb-2 border-b border-white/5 text-[10px] flex justify-between items-center uppercase tracking-[0.2em] opacity-80">
+                            [OUTPUT_TARGET]
+                            {processor.tuningPreset !== TuningPreset.STANDARD_440 && <div className="w-1.5 h-1.5 bg-blue-500 animate-pulse" />}
+                          </h4>
+                          
+                          <div className="mb-6 flex justify-between items-end">
+                              <div className="flex flex-col">
+                                  <div className="text-[10px] text-slate-500 font-mono mb-1">TARGET_FREQ</div>
+                                  <div className={`text-3xl font-bold font-mono tracking-tighter ${processor.isComparing ? 'text-slate-600 line-through' : 'text-white text-glow'}`}>
+                                      {processor.isComparing ? processor.analysis.detectedPitch.toFixed(1) : processor.tuningPreset} <span className="text-lg opacity-50 font-sans">Hz</span>
+                                  </div>
+                              </div>
+                              <div className="text-[10px] text-blue-500 font-mono tracking-widest uppercase border border-blue-500/20 px-2 py-1 bg-blue-500/5">
+                                  {processor.isComparing ? "BYPASS" : `MODE:${TuningPreset[processor.tuningPreset]}`}
+                              </div>
+                          </div>
+                          
+                          <div className="space-y-3 font-mono">
+                              <div className="flex justify-between text-[10px]">
+                                  <span className="text-slate-600 uppercase">Pitch Delta</span>
+                                  <span className="text-blue-300">{processor.isComparing ? "0.00%" : processor.helpers.getShiftPercentage()}</span>
+                              </div>
+                              <div className="flex justify-between text-[10px]">
+                                  <span className="text-slate-600 uppercase">Time Dilation</span>
+                                  <span className="text-blue-300">{processor.isComparing ? "0.00s" : processor.helpers.getAddedTime()}</span>
+                              </div>
+                              <div className="w-full h-px bg-white/5 my-2"></div>
+                              <div className="flex justify-between text-[10px]">
+                                  <span className="text-slate-600 uppercase">DSP Status</span>
+                                  <span className="text-emerald-500">ACTIVE</span>
+                              </div>
+                          </div>
+                        </div>
+                      </div>
                   </div>
                 </div>
+              )}
 
-                {/* Target Output Card */}
-                <div className={`
-                   bg-slate-800/30 p-4 rounded-xl border transition-all duration-300 flex flex-col justify-between
-                   ${processor.tuningPreset !== TuningPreset.STANDARD_440 ? 'border-emerald-500/50 shadow-lg shadow-emerald-500/10' : 'border-slate-700'}
-                `}>
-                  <div>
-                    <h4 className="text-emerald-400 font-medium mb-1 text-sm flex justify-between items-center">
-                      Processed Output
-                      {processor.tuningPreset !== TuningPreset.STANDARD_440 && <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full">ACTIVE</span>}
-                    </h4>
-                    
-                    <div className="mb-3">
-                         <div className={`text-2xl font-bold font-mono tracking-tight ${processor.isComparing ? 'text-amber-500 line-through decoration-slate-500' : 'text-white'}`}>
-                             {processor.isComparing ? processor.analysis.detectedPitch.toFixed(1) : processor.tuningPreset} Hz
-                         </div>
-                         <div className="text-xs text-slate-400">
-                             {processor.isComparing ? "BYPASSED (ORIGINAL)" : TUNING_LABELS[processor.tuningPreset]}
-                         </div>
-                    </div>
-                    
-                    <div className="space-y-1">
-                        <div className="flex justify-between text-xs border-b border-slate-700/50 pb-1 mb-1">
-                            <span className="text-slate-500">Pitch Shift</span>
-                            <span className="text-emerald-300 font-mono">{processor.isComparing ? "0%" : processor.helpers.getShiftPercentage()}</span>
-                        </div>
-                        <div className="flex justify-between text-xs border-b border-slate-700/50 pb-1 mb-1">
-                            <span className="text-slate-500">Time Dilation</span>
-                            <span className="text-emerald-300 font-mono">{processor.isComparing ? "0s" : processor.helpers.getAddedTime()}</span>
-                        </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 mt-3 pt-3 border-t border-slate-700/50">
-                    <span className="text-[10px] flex items-center gap-1 text-emerald-400/80 bg-emerald-900/20 px-1.5 py-0.5 rounded border border-emerald-500/20">
-                          <ShieldCheck size={10} /> DITHERED
-                    </span>
-                    {processor.tuningPreset !== TuningPreset.STANDARD_440 && (
-                        <span className="text-[10px] flex items-center gap-1 text-purple-400/80 bg-purple-900/20 px-1.5 py-0.5 rounded border border-purple-500/20">
-                            <Settings2 size={10} /> SATURATED
-                        </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-6 flex justify-center">
-                 <button 
-                  onClick={processor.reset}
-                  className="text-xs text-slate-500 hover:text-slate-300 underline"
-                 >
-                   Upload different track
-                 </button>
-              </div>
             </div>
           )}
+        </main>
+      </div>
 
-        </div>
-      </main>
+      {/* BOTTOM MOBILE NAVIGATION (Only on < md) */}
+      <MobileNav 
+        hasFile={!!processor.file} 
+        activeView={activeView}
+        onNavigate={setActiveView}
+        onReset={handleReset}
+      />
+
+      {/* SYSTEM LOG CONSOLE */}
+      <DebugConsole 
+        isOpen={showDebug} 
+        onClose={() => setShowDebug(false)} 
+      />
+
     </div>
   );
 };
